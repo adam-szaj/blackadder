@@ -153,6 +153,10 @@ class ProcessSnapshot(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now)
     description: str = ""  # e.g., "core dump from crash at 2026-04-06 14:30:00"
 
+    # Phase 2.2: Core dump parsing support
+    source_type: str = Field(default="maps")  # "maps", "core_dump", "gdb_live"
+    source_path: Optional[str] = None  # Path to core dump file if applicable
+
     # Relationships
     mappings: list["MemoryMapping"] = Relationship(back_populates="process")
     process_binaries: list["ProcessBinary"] = Relationship(back_populates="process")

@@ -288,6 +288,83 @@ async def syms(
 
 
 @app.command()
+async def load_core_dump(
+    core_file: str = typer.Option(
+        ..., "--core", "-c", help="Path to ELF core dump file"
+    ),
+    db: Optional[str] = typer.Option(
+        None, "--db", "-d", help="Path to process database (default: blackadder-process.db)"
+    ),
+) -> None:
+    """
+    Load process state from ELF core dump file (Phase 2.2).
+
+    Parses core dump to extract memory mappings and process metadata
+    for offline crash analysis.
+
+    Example:
+        baldrick load-core-dump --core /tmp/core.12345
+        baldrick load-core-dump --core ./core.dump --db my.db
+    """
+    config = _get_config_or_default()
+    db_path = db or config.process_db
+
+    try:
+        # Check file exists
+        core_path = Path(core_file)
+        if not core_path.exists():
+            console.print(f"[red]Error: core dump file not found: {core_file}[/red]")
+            raise typer.Exit(1)
+
+        # Create database and load core dump
+        manager = AsyncDatabaseManager(db_path)
+        db_proc = ProcessDatabase(manager, config)
+
+        console.print(f"[blue]Parsing core dump from {core_file}...[/blue]")
+
+        process = await db_proc.load_core_dump(str(core_path))
+
+        console.print(
+            f"[green]✓ Loaded core dump as process snapshot ID {process.id} "
+            f"with {len(process.mappings)} memory segments[/green]"
+        )
+
+        # Show summary
+        table = Table(title="Memory Segments from Core Dump")
+        table.add_column("Start Address", style="cyan")
+        table.add_column("End Address", style="cyan")
+        table.add_column("Permissions", style="magenta")
+        table.add_column("Offset", style="yellow")
+
+        for mapping in list(process.mappings)[:10]:  # Show first 10
+            size = mapping.end_addr - mapping.start_addr
+            table.add_row(
+                f"{mapping.start_addr:#x}",
+                f"{mapping.end_addr:#x}",
+                mapping.perms,
+                f"{mapping.offset:#x} ({size:#x} bytes)",
+            )
+
+        if len(process.mappings) > 10:
+            table.add_row(
+                "[yellow]...[/yellow]",
+                "[yellow]...[/yellow]",
+                "[yellow]...[/yellow]",
+                f"[yellow]({len(process.mappings) - 10} more segments)[/yellow]",
+            )
+
+        console.print(table)
+
+        console.print(f"[blue]Source: {process.source_type} ({process.source_path})[/blue]")
+
+        await manager.close()
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     import blackadder

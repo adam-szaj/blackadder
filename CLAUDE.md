@@ -215,15 +215,23 @@ See `blackadder/binutils/resolver.py:parse_backtrace_auto()` for regex patterns.
 | Parse 10k symbols | 1 binary | ~800ms | ~100ms | 8x |
 | Backtrace (1000 frames) | 100+ binaries | N/A | ~2-3s | - |
 
-## Phase 2.2 (Core Dump Parsing - Planned)
+### Phase 2.2 - Core Dump Parsing (Completed)
 
 **Goal**: Parse ELF core dump files to reconstruct process memory layout offline.
 
-**Modules to add**:
-- `blackadder/binutils/coredump.py`: CoreDumpParser (parse ELF core dumps via readelf)
-- `ProcessDatabase.load_core_dump()`: Load offline crash analysis
+**Implementation**:
+- `CoreDumpParser`: Parse core dump headers and program headers via readelf
+- `ProcessDatabase.load_core_dump()`: Load core dump as ProcessSnapshot
 - `ProcessSnapshot.source_type` and `source_path`: Track data source (maps vs core dump)
 - CLI command: `load-core-dump`
+
+**Files**:
+- `blackadder/binutils/coredump.py` (258 lines)
+- `blackadder/db/process.py`: +load_core_dump() method (40 lines)
+- `blackadder/models.py`: +source_type, +source_path fields
+- `blackadder/cli/main.py`: +load-core-dump command (70 lines)
+- `tests/test_coredump.py` (350 lines)
+- `PHASE_2_2_STATUS.md` (comprehensive implementation details)
 
 **Design**: Uses readelf to extract PT_LOAD segments from core dump, converts to /proc/maps-like format, reuses existing address resolution logic.
 

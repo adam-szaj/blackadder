@@ -225,6 +225,51 @@ class ProcessDatabase:
         self.symbol_cache[cache_key] = symbol
         return symbol
 
+    async def load_core_dump(self, core_path: str) -> ProcessSnapshot:
+        """
+        Load process state from ELF core dump file (Phase 2.2).
+
+        Parallel to load_maps():
+        1. Parse core dump via CoreDumpParser
+        2. Create ProcessSnapshot (pid from core, or None)
+        3. Create MemoryMapping objects for each segment
+        4. Store in database
+
+        Args:
+            core_path: Path to ELF core dump file
+
+        Returns:
+            ProcessSnapshot with memory mappings from core dump
+        """
+        from blackadder.binutils.coredump import CoreDumpParser
+
+        # Parse the core dump
+        parser = CoreDumpParser(self.config)
+        core_data = await parser.parse_core_dump(core_path)
+
+        if not core_data:
+            raise ValueError(f"Failed to parse core dump: {core_path}")
+
+        # Create process snapshot
+        async with self.manager.get_session() as session:
+            process = ProcessSnapshot(
+                pid=core_data.get("pid"),
+                description=f"Core dump from {core_path}",
+                source_type="core_dump",
+                source_path=core_path,
+            )
+
+            # Create memory mappings from core dump segments
+            for map_data in core_data["mappings"]:
+                mapping = MemoryMapping(**map_data)
+                process.mappings.append(mapping)
+
+            session.add(process)
+            await session.commit()
+            await session.refresh(process)
+
+        return process
+
     async def identify_process_binaries_fuzzy(
         self,
         process_id: int,
