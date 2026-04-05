@@ -60,6 +60,7 @@ class Binary(SQLModel, table=True):
     # Relationships
     sections: list["SectionHeader"] = Relationship(back_populates="binary")
     symbols: list["Symbol"] = Relationship(back_populates="binary")
+    fingerprints: list["FunctionFingerprint"] = Relationship(back_populates="binary")
 
 
 class SectionHeader(SQLModel, table=True):
@@ -101,6 +102,25 @@ class Symbol(SQLModel, table=True):
 
     # Relationships
     binary: Binary = Relationship(back_populates="symbols")
+
+
+class FunctionFingerprint(SQLModel, table=True):
+    """
+    Hash of function body for version-mismatch matching (Phase 2).
+
+    Enables binary matching when MD5 differs but code is similar.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    binary_id: int = Field(foreign_key="binary.id", index=True)
+    func_name: str = Field(index=True, max_length=256)
+    func_offset: int  # Offset in binary
+    func_size: int
+    # Ignore addresses/relocations, hash the instruction bytes
+    content_hash: str = Field(max_length=64)  # SHA256 of normalized function body
+
+    # Relationships
+    binary: Binary = Relationship(back_populates="fingerprints")
 
 
 class BinaryLocator(SQLModel, table=True):

@@ -225,6 +225,100 @@ class ProcessDatabase:
         self.symbol_cache[cache_key] = symbol
         return symbol
 
+    async def identify_process_binaries_fuzzy(
+        self,
+        process_id: int,
+        rootfs_session: AsyncSession,
+        match_threshold: float = 0.7,
+    ) -> None:
+        """
+        Identify binaries in process using fuzzy matching (Phase 2).
+
+        For each MemoryMapping in the process:
+        1. Try exact match first (MD5)
+        2. If no match, compute fingerprints
+        3. Find best match in rootfs via BinaryMatcher
+        4. Update ProcessBinary with match_score and match_method
+
+        Sets: match_method = "exact" or "hash", match_score = 0.0-1.0
+
+        Args:
+            process_id: ProcessSnapshot ID
+            rootfs_session: AsyncSession for rootfs database
+            match_threshold: Min score to accept fuzzy match
+        """
+        from blackadder.binutils.hasher import FunctionHasher
+        from blackadder.binutils.matcher import BinaryMatcher
+
+        async with self.manager.get_session() as session:
+            # Load all memory mappings for this process
+            statement = select(MemoryMapping).where(
+                MemoryMapping.process_id == process_id
+            )
+            result = await session.exec(statement)
+            mappings = result.all()
+
+            for mapping in mappings:
+                # Skip non-file mappings
+                if not mapping.pathname or mapping.pathname.startswith("["):
+                    continue
+
+                # Try to find ProcessBinary record
+                pb_statement = select(ProcessBinary).where(
+                    ProcessBinary.mapping_id == mapping.id
+                )
+                pb_result = await session.exec(pb_statement)
+                process_binary = pb_result.first()
+
+                if not process_binary:
+                    continue
+
+                # If already has exact match, skip fuzzy matching
+                if process_binary.binary_id is not None:
+                    # Set match method for exact match
+                    process_binary.match_method = "exact"
+                    process_binary.match_score = 1.0
+                    continue
+
+                # Compute fingerprints for process binary
+                hasher = FunctionHasher(self.config)
+                target_fps = await hasher.compute_fingerprints(mapping.pathname)
+
+                if not target_fps:
+                    # Can't compute fingerprints, skip
+                    process_binary.match_method = "symbol"
+                    continue
+
+                # Find matching binaries by name in rootfs
+                name_statement = select(Binary).where(
+                    Binary.name == mapping.pathname.split("/")[-1]
+                )
+                name_result = await rootfs_session.exec(name_statement)
+                candidates = name_result.all()
+
+                if not candidates:
+                    # No candidates found
+                    process_binary.match_method = "symbol"
+                    continue
+
+                # Score matches
+                matches = await BinaryMatcher.find_matches(
+                    target_fps, candidates, rootfs_session, match_threshold
+                )
+
+                if matches:
+                    # Use best match
+                    best_binary, score, method = matches[0]
+                    process_binary.binary_id = best_binary.id
+                    process_binary.match_score = score
+                    process_binary.match_method = method
+                else:
+                    # No fuzzy match either
+                    process_binary.match_method = "symbol"
+
+            # Commit updates
+            await session.commit()
+
     @staticmethod
     def _parse_maps_lines(lines: list[str]) -> list[dict]:
         """
