@@ -234,6 +234,48 @@ class CoreDumpParser:
 
         return mappings
 
+    async def extract_register_state(self, core_path: str) -> dict:
+        """
+        Extract CPU register state from PT_NOTE sections (Phase 2.3).
+
+        Uses readelf to get note information, then parses NT_PRSTATUS.
+
+        Args:
+            core_path: Path to core dump
+
+        Returns:
+            {
+                'rax': 0x...,
+                'rbx': 0x...,
+                'rip': 0x...,  # Crash location
+                'rsp': 0x...,
+                ...
+            }
+        """
+        notes_output = await self._get_readelf_output(core_path, ["-n"])
+
+        if not notes_output:
+            return {}
+
+        # Parse notes to find register information
+        # For MVP, extract what we can from readelf output
+        registers = {}
+
+        # Look for register values in notes output
+        # Readelf -n output contains register values as hex
+        # Pattern: "R15:" or similar
+        register_pattern = re.compile(r"(?:RAX|RBX|RCX|RDX|RSI|RDI|RBP|RSP|RIP|R\d+):\s+([0-9a-f]+)")
+
+        for match in register_pattern.finditer(notes_output, re.IGNORECASE):
+            reg_name = match.group(0).split(":")[0].lower()
+            try:
+                reg_value = int(match.group(1), 16)
+                registers[reg_name] = reg_value
+            except ValueError:
+                pass
+
+        return registers
+
     @staticmethod
     def _extract_metadata_from_program_headers(
         program_headers: list[dict],

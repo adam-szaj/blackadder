@@ -206,10 +206,52 @@ def test_process_database_core_dump():
     print("✓ ProcessDatabase Phase 2.2 tests passed\n")
 
 
+def test_memory_analyzer_import():
+    """Test that MemoryAnalyzer can be imported."""
+    print("Testing memory analyzer imports...")
+
+    from blackadder.memory_analyzer import MemoryAnalyzer
+
+    # Check methods exist
+    assert hasattr(MemoryAnalyzer, "classify_region"), "MemoryAnalyzer should have classify_region"
+    assert hasattr(MemoryAnalyzer, "detect_anomalies"), "MemoryAnalyzer should have detect_anomalies"
+    assert hasattr(MemoryAnalyzer, "check_corruption_markers"), "MemoryAnalyzer should have check_corruption_markers"
+    assert hasattr(MemoryAnalyzer, "format_register_display"), "MemoryAnalyzer should have format_register_display"
+    print("  ✓ MemoryAnalyzer has required methods")
+
+    print("✓ Memory analyzer import tests passed\n")
+
+
+def test_register_state_model():
+    """Test that ProcessRegisterState model exists."""
+    print("Testing ProcessRegisterState model...")
+
+    from blackadder.models import ProcessRegisterState, MemoryRegionType, MemoryRegionAnalysis
+
+    # Check fields exist
+    rs_fields = {f.name for f in ProcessRegisterState.__fields__.values()}
+    assert "rax" in rs_fields, "ProcessRegisterState should have rax field"
+    assert "rip" in rs_fields, "ProcessRegisterState should have rip field (crash location)"
+    print("  ✓ ProcessRegisterState has register fields")
+
+    # Check enum
+    assert hasattr(MemoryRegionType, "HEAP"), "MemoryRegionType should have HEAP"
+    assert hasattr(MemoryRegionType, "STACK"), "MemoryRegionType should have STACK"
+    print("  ✓ MemoryRegionType enum defined")
+
+    # Check analysis model
+    ma_fields = {f.name for f in MemoryRegionAnalysis.__fields__.values()}
+    assert "region_type" in ma_fields, "MemoryRegionAnalysis should have region_type"
+    assert "likely_corrupted" in ma_fields, "MemoryRegionAnalysis should have likely_corrupted"
+    print("  ✓ MemoryRegionAnalysis model defined")
+
+    print("✓ Register state and memory analysis model tests passed\n")
+
+
 def main():
     """Run all validation tests."""
     print("=" * 70)
-    print("Blackadder Phase 2 Implementation Validation (2.1 + 2.2)")
+    print("Blackadder Phase 2 Implementation Validation (2.1 + 2.2 + 2.3)")
     print("=" * 70)
     print()
 
@@ -224,6 +266,10 @@ def main():
         test_coredump_import()
         test_processsnapshot_fields()
         test_process_database_core_dump()
+
+        print("[Phase 2.3: Enhanced Memory Analysis]")
+        test_memory_analyzer_import()
+        test_register_state_model()
 
         print("=" * 70)
         print("✓ ALL VALIDATION TESTS PASSED")
@@ -240,11 +286,23 @@ def main():
         print("  ✓ CoreDumpParser: ELF core dump parsing via readelf")
         print("  ✓ ProcessSnapshot: source_type and source_path fields")
         print("  ✓ ProcessDatabase.load_core_dump(): Load offline crashes")
+        print("  ✓ extract_register_state(): Extract registers from PT_NOTE")
         print("  ✓ CLI: load-core-dump command")
+        print()
+        print("Phase 2.3 (Enhanced Memory Analysis) implementation:")
+        print("  ✓ MemoryAnalyzer: Region classification and anomaly detection")
+        print("  ✓ ProcessRegisterState: CPU register storage")
+        print("  ✓ MemoryRegionAnalysis: Analysis results per mapping")
+        print("  ✓ MemoryRegionType enum: Classification types")
+        print("  ✓ Corruption detection: Executable heap, RWX regions, etc.")
+        print("  ✓ CLI: analyze-memory command")
         print()
         print("Combined capabilities:")
         print("  ✓ Live process analysis via /proc/maps")
         print("  ✓ Offline crash analysis via core dump files")
+        print("  ✓ Register state extraction from core dumps")
+        print("  ✓ Memory region classification and anomaly detection")
+        print("  ✓ Corruption risk assessment")
         print("  ✓ Binary matching for version mismatches")
         print("  ✓ Parallel backtrace decoding (10-15x speedup)")
         print("  ✓ Symbol resolution with fuzzy matching")

@@ -235,12 +235,61 @@ See `blackadder/binutils/resolver.py:parse_backtrace_auto()` for regex patterns.
 
 **Design**: Uses readelf to extract PT_LOAD segments from core dump, converts to /proc/maps-like format, reuses existing address resolution logic.
 
+### Phase 2.3 - Enhanced Memory Analysis (Completed)
+
+**Goal**: Classify memory regions, detect anomalies, and analyze corruption risks.
+
+**Implementation**:
+- `MemoryAnalyzer`: Classify regions, detect anomalies, check corruption markers
+- `ProcessRegisterState`: Store CPU registers from core dump PT_NOTE
+- `MemoryRegionAnalysis`: Store classification and anomaly analysis per mapping
+- `ProcessDatabase.analyze_memory_layout()`: Full memory analysis workflow
+- CLI commands: `analyze-memory`
+
+**Files**:
+- `blackadder/memory_analyzer.py` (227 lines)
+- `blackadder/models.py`: +MemoryRegionType enum, +ProcessRegisterState, +MemoryRegionAnalysis
+- `blackadder/binutils/coredump.py`: +extract_register_state() method
+- `blackadder/db/process.py`: +analyze_memory_layout() method
+- `blackadder/cli/main.py`: +analyze-memory command (50 lines)
+- `tests/test_memory_analyzer.py` (334 lines, 20 tests)
+- `PHASE_2_3_STATUS.md` (comprehensive implementation details)
+
+**Design**: Classify heap/stack/vdso/library/JIT regions via heuristics, detect executable heap/RWX/oversized allocations, assess corruption risk.
+
+## Memory Region Classification (Phase 2.3)
+
+### Supported Types
+- HEAP, STACK: Explicit markers or heuristics
+- VDSO, VSYSCALL, VVAR: System regions
+- TEXT, DATA: Binary sections
+- MMAP: Shared libraries and mmap'd regions
+- JIT: Runtime compiled code (RWX anonymous)
+- ANON: Anonymous memory
+- UNKNOWN: Unclassified
+
+### Anomaly Detection
+- **Executable heap**: Code injection marker (heap + x)
+- **RWX region**: Unusual permissions (rwx)
+- **Oversized region**: > 1GB allocation
+- **Writable code**: Writable + executable libraries
+- **Large stack**: > 256MB region
+
+### Corruption Indicators
+- Executable heap (code injection)
+- RWX region (full permissions unusual)
+- Writable vdso/vsyscall (should be read-only)
+
 ## Future Enhancements
 
-- Live GDB session support (Phase 2)
+- Extended register extraction (float, AVX via pyelftools)
+- Heap structure analysis (free list corruption detection)
+- Stack buffer overflow detection
+- ROP gadget detection
+- Memory diff (compare two core dumps)
+- Memory layout visualization
+- Live GDB session support (Phase 3)
 - Remote service for embedded GDB clients (Phase 3)
-- Enhanced memory introspection (Phase 3)
-- Register/stack value interpretation (Phase 3)
 - Stripped binary symbol recovery (Phase 3+)
 
 ## Testing Strategy

@@ -225,6 +225,74 @@ class ProcessDatabase:
         self.symbol_cache[cache_key] = symbol
         return symbol
 
+    async def analyze_memory_layout(
+        self,
+        process_id: int,
+        register_state: Optional[dict] = None,
+    ) -> dict:
+        """
+        Analyze and classify all memory regions (Phase 2.3).
+
+        For each MemoryMapping:
+        1. Classify region type (heap, stack, vdso, etc.)
+        2. Detect anomalies
+        3. Check for corruption markers
+
+        Args:
+            process_id: ProcessSnapshot ID
+            register_state: Optional CPU register state (for stack detection)
+
+        Returns:
+            {
+                'regions': {...},
+                'anomalies': [...],
+                'corruption_risk': float,
+            }
+        """
+        from blackadder.memory_analyzer import MemoryAnalyzer
+
+        async with self.manager.get_session() as session:
+            statement = select(MemoryMapping).where(
+                MemoryMapping.process_id == process_id
+            )
+            result = await session.exec(statement)
+            mappings = result.all()
+
+            analyzer = MemoryAnalyzer(self.config)
+            all_anomalies = []
+            corruption_count = 0
+
+            for mapping in mappings:
+                # Analyze region
+                analysis_data = analyzer.analyze_memory_region(
+                    mapping.pathname,
+                    mapping.start_addr,
+                    mapping.end_addr,
+                    mapping.perms,
+                    mapping.offset,
+                    register_state,
+                )
+
+                if analysis_data.get("anomalies"):
+                    all_anomalies.extend(analysis_data["anomalies"])
+
+                if analysis_data.get("likely_corrupted"):
+                    corruption_count += 1
+
+            # Calculate corruption risk (0.0-1.0)
+            corruption_risk = (
+                min(corruption_count / max(len(mappings), 1), 1.0)
+                if mappings
+                else 0.0
+            )
+
+            return {
+                "regions_analyzed": len(mappings),
+                "anomalies": all_anomalies,
+                "corruption_count": corruption_count,
+                "corruption_risk": corruption_risk,
+            }
+
     async def load_core_dump(self, core_path: str) -> ProcessSnapshot:
         """
         Load process state from ELF core dump file (Phase 2.2).

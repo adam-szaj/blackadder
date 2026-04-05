@@ -6,6 +6,7 @@ Defines models for both rootfs database (binary metadata) and process database
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, field_validator
@@ -160,6 +161,7 @@ class ProcessSnapshot(SQLModel, table=True):
     # Relationships
     mappings: list["MemoryMapping"] = Relationship(back_populates="process")
     process_binaries: list["ProcessBinary"] = Relationship(back_populates="process")
+    register_state: Optional["ProcessRegisterState"] = Relationship(back_populates="process")
 
 
 class MemoryMapping(SQLModel, table=True):
@@ -179,6 +181,7 @@ class MemoryMapping(SQLModel, table=True):
 
     # Relationships
     process: ProcessSnapshot = Relationship(back_populates="mappings")
+    analysis: Optional["MemoryRegionAnalysis"] = Relationship(back_populates="mapping")
 
 
 class ProcessBinary(SQLModel, table=True):
@@ -219,3 +222,94 @@ class BacktraceEntry(SQLModel, table=True):
     resolved_file: Optional[str] = Field(default=None, max_length=512)  # "src/file.c"
     resolved_line: Optional[int] = None
     match_confidence: float = Field(default=1.0)  # 0.0-1.0 for fuzzy matches
+
+
+# ============================================================================
+# Phase 2.3: Enhanced Memory Analysis Models
+# ============================================================================
+
+
+class MemoryRegionType(str, Enum):
+    """Classification of memory region type."""
+
+    UNKNOWN = "unknown"
+    TEXT = "text"  # .text section (executable)
+    DATA = "data"  # .data section
+    HEAP = "heap"  # Heap region
+    STACK = "stack"  # Stack region
+    VDSO = "vdso"  # Virtual dynamic shared object
+    VSYSCALL = "vsyscall"  # vsyscall page
+    JIT = "jit"  # JIT compiled code
+    MMAP = "mmap"  # mmap'd region
+    VVAR = "vvar"  # vvar region
+    ANON = "anon"  # Anonymous mapping
+
+
+class ProcessRegisterState(SQLModel, table=True):
+    """
+    CPU register state from core dump PT_NOTE sections (Phase 2.3).
+
+    Stores x86-64 general purpose and special registers from core dump.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    process_id: int = Field(foreign_key="processsnapshot.id", index=True)
+
+    # General purpose registers (x86-64)
+    rax: Optional[int] = None
+    rbx: Optional[int] = None
+    rcx: Optional[int] = None
+    rdx: Optional[int] = None
+    rsi: Optional[int] = None
+    rdi: Optional[int] = None
+    rbp: Optional[int] = None  # Frame pointer
+    rsp: Optional[int] = None  # Stack pointer
+    rip: Optional[int] = None  # Instruction pointer (crash location)
+
+    # Extended registers
+    r8: Optional[int] = None
+    r9: Optional[int] = None
+    r10: Optional[int] = None
+    r11: Optional[int] = None
+    r12: Optional[int] = None
+    r13: Optional[int] = None
+    r14: Optional[int] = None
+    r15: Optional[int] = None
+
+    # Flags
+    eflags: Optional[int] = None
+
+    # Relationships
+    process: ProcessSnapshot = Relationship(back_populates="register_state")
+
+
+class MemoryRegionAnalysis(SQLModel, table=True):
+    """
+    Analysis results for a memory region (Phase 2.3).
+
+    Stores classification, anomalies, and corruption risk for each mapping.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    mapping_id: int = Field(foreign_key="memorymapping.id", index=True)
+
+    # Classification
+    region_type: str = Field(default=MemoryRegionType.UNKNOWN)  # Enum as string
+    confidence: float = Field(default=0.0)  # 0.0-1.0 confidence
+
+    # Analysis results
+    is_writable: bool = False
+    is_executable: bool = False
+    likely_corrupted: bool = False
+    anomalies: str = ""  # JSON-serialized list of anomalies
+
+    # Relationships
+    mapping: MemoryMapping = Relationship(back_populates="analysis")
+
+
+# Add relationships to ProcessSnapshot
+ProcessSnapshot.update_forward_refs()
+
+
+# Add relationships to MemoryMapping (update after MemoryRegionAnalysis defined)
+MemoryMapping.update_forward_refs()

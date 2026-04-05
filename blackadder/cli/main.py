@@ -365,6 +365,58 @@ async def load_core_dump(
 
 
 @app.command()
+async def analyze_memory(
+    pid: int = typer.Option(..., "--pid", "-p", help="Process snapshot ID"),
+    db: Optional[str] = typer.Option(None, "--db", "-d", help="Path to process database"),
+) -> None:
+    """
+    Analyze memory layout and detect anomalies (Phase 2.3).
+
+    Shows:
+    - Memory region classification (heap, stack, libraries, etc.)
+    - Detected anomalies (executable heap, oversized regions, etc.)
+    - Corruption risk assessment
+
+    Example:
+        baldrick analyze-memory --pid 1
+    """
+    config = _get_config_or_default()
+    db_path = db or config.process_db
+
+    try:
+        manager = AsyncDatabaseManager(db_path)
+        db_proc = ProcessDatabase(manager, config)
+
+        console.print(f"[blue]Analyzing memory layout for process {pid}...[/blue]")
+
+        result = await db_proc.analyze_memory_layout(pid)
+
+        # Display results
+        console.print()
+        console.print(f"[green]Memory Analysis Results[/green]")
+        console.print(f"Regions analyzed: {result['regions_analyzed']}")
+        console.print(
+            f"Regions with anomalies: {len(result['anomalies'])} anomalies detected"
+        )
+        console.print(
+            f"Corruption risk: {result['corruption_risk']:.1%} "
+            f"({result['corruption_count']} regions suspicious)"
+        )
+
+        if result["anomalies"]:
+            console.print()
+            console.print("[yellow]Detected Anomalies:[/yellow]")
+            for i, anomaly in enumerate(result["anomalies"], 1):
+                console.print(f"  {i}. {anomaly}")
+
+        await manager.close()
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     import blackadder
