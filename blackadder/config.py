@@ -1,0 +1,146 @@
+"""
+Configuration management for blackadder.
+
+Uses Pydantic Settings for type-safe config loading from environment,
+.env files, or defaults. Supports dynamic concurrency tuning.
+"""
+
+import os
+from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
+
+
+class BlackadderConfig(BaseSettings):
+    """
+    Application configuration.
+
+    Loads from environment variables, .env file, or defaults.
+    Can be overridden per-command via CLI arguments.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    # =========================================================================
+    # Database configuration
+    # =========================================================================
+
+    rootfs_db: str = Field(
+        default="sqlite+aiosqlite:///blackadder-rootfs.db",
+        description="Path to rootfs (binary metadata) database",
+    )
+
+    process_db: str = Field(
+        default="sqlite+aiosqlite:///blackadder-process.db",
+        description="Path to process (runtime analysis) database",
+    )
+
+    # =========================================================================
+    # Binary search paths
+    # =========================================================================
+
+    rootfs_paths: list[str] = Field(
+        default_factory=lambda: ["/"],
+        description="Colon-separated paths to search for binaries",
+    )
+
+    debugfs_paths: list[str] = Field(
+        default_factory=lambda: ["/usr/lib/debug"],
+        description="Paths to search for debug symbols",
+    )
+
+    source_paths: list[str] = Field(
+        default_factory=list,
+        description="Colon-separated paths to search for source files",
+    )
+
+    # =========================================================================
+    # Binutils tool paths
+    # =========================================================================
+
+    objdump_path: str = Field(
+        default="/usr/bin/objdump",
+        description="Path to objdump binary",
+    )
+
+    readelf_path: str = Field(
+        default="/usr/bin/readelf",
+        description="Path to readelf binary",
+    )
+
+    addr2line_path: str = Field(
+        default="/usr/bin/addr2line",
+        description="Path to addr2line binary",
+    )
+
+    # =========================================================================
+    # Concurrency and performance tuning
+    # =========================================================================
+
+    max_subprocess_workers: int = Field(
+        default_factory=lambda: min(32, (os.cpu_count() or 4) * 2),
+        description="Max concurrent subprocess (objdump/addr2line) calls. "
+        "Auto-detected based on CPU count, capped at 32.",
+    )
+
+    max_symbol_cache_size: int = Field(
+        default=100_000,
+        description="Max symbols to cache in memory (~100k typical)",
+    )
+
+    db_pool_size: int = Field(
+        default=10,
+        description="Max concurrent database connections (mostly for compatibility)",
+    )
+
+    db_max_overflow: int = Field(
+        default=5,
+        description="Extra database connections for load spikes",
+    )
+
+    symbol_batch_size: int = Field(
+        default=100,
+        description="Batch size for symbol resolution (tune based on system)",
+    )
+
+    frame_batch_size: int = Field(
+        default=50,
+        description="Batch size for backtrace frame decoding",
+    )
+
+    # =========================================================================
+    # Logging and debug
+    # =========================================================================
+
+    debug: bool = Field(
+        default=False,
+        description="Enable debug logging",
+    )
+
+    sql_echo: bool = Field(
+        default=False,
+        description="Log all SQL queries",
+    )
+
+    # =========================================================================
+    # Validation and defaults
+    # =========================================================================
+
+    def __init__(self, **data):
+        """Initialize config with auto-detection."""
+        super().__init__(**data)
+
+        # Auto-detect CPU count if not explicitly set
+        if "max_subprocess_workers" not in data:
+            cpu_count = os.cpu_count() or 4
+            self.max_subprocess_workers = min(32, cpu_count * 2)
+
+
+def get_config() -> BlackadderConfig:
+    """Get global config instance (singleton-like)."""
+    return BlackadderConfig()

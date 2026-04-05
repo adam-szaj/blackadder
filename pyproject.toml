@@ -1,9 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "blackadder-github"
+name = "blackadder"
 version = "0.1.0"
-description = "Add your description here"
+description = "High-level Linux binutils wrapper for debugging - backtrace decoding, symbol resolution, memory analysis"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Adam Szaj" }]
 dependencies = [
-    "sqlalchemy>=2.0.49",
+    "sqlmodel>=0.0.14",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.19",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "typer[all]>=0.9",
+    "aiofiles>=23.2",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.1",
+    "black>=23.7",
+    "ruff>=0.1",
+    "mypy>=1.5",
+    "types-aiofiles>=23.2",
+]
+
+[project.scripts]
+baldrick = "blackadder.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["blackadder"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+select = ["E", "F", "W", "I", "N", "UP", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=blackadder --cov-report=html --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+omit = [
+    "blackadder/__main__.py",
+    "tests/*",
 ]
