@@ -114,6 +114,40 @@ class BlackadderConfig(BaseSettings):
     )
 
     # =========================================================================
+    # Resource limits (Phase 2 hardening)
+    # =========================================================================
+
+    max_memory_regions: int = Field(
+        default=10000,
+        description="Max memory regions per process (prevent DOS)",
+    )
+
+    max_region_size: int = Field(
+        default=0x40000000,  # 1GB
+        description="Max single region size (bytes)",
+    )
+
+    max_core_dump_size: int = Field(
+        default=0x40000000,  # 1GB
+        description="Max core dump file size (bytes)",
+    )
+
+    max_backtraces_cached: int = Field(
+        default=100_000,
+        description="Max backtraces in analysis (prevent memory growth)",
+    )
+
+    query_timeout_seconds: int = Field(
+        default=30,
+        description="Max time for database queries (seconds)",
+    )
+
+    subprocess_timeout_seconds: int = Field(
+        default=10,
+        description="Max time for tool execution (objdump, readelf, etc.)",
+    )
+
+    # =========================================================================
     # Logging and debug
     # =========================================================================
 
@@ -125,6 +159,11 @@ class BlackadderConfig(BaseSettings):
     sql_echo: bool = Field(
         default=False,
         description="Log all SQL queries",
+    )
+
+    log_file: Optional[str] = Field(
+        default=None,
+        description="Optional path to log file",
     )
 
     # =========================================================================

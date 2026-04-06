@@ -2,13 +2,21 @@
 Memory analysis for process snapshots (Phase 2.3).
 
 Classifies memory regions, detects anomalies, and analyzes potential corruption.
+Includes comprehensive error handling and validation (Phase 2 hardening).
 """
 
-import json
+import logging
 import re
 from typing import Optional
 
 from blackadder.models import MemoryRegionType
+from blackadder.exceptions import (
+    ValidationError,
+    InvalidArgumentError,
+    MemoryAnalysisError,
+)
+
+logger = logging.getLogger("blackadder.analyzer")
 
 
 class MemoryAnalyzer:
@@ -28,6 +36,11 @@ class MemoryAnalyzer:
     ) -> tuple[MemoryRegionType, float]:
         """
         Classify memory region type and confidence.
+
+        Validates inputs and handles edge cases gracefully.
+
+        Raises:
+            ValidationError: If inputs are invalid
 
         Heuristics:
         - pathname contains "heap" → HEAP
@@ -49,7 +62,27 @@ class MemoryAnalyzer:
 
         Returns:
             (MemoryRegionType, confidence: 0.0-1.0)
+
+        Raises:
+            ValidationError: If address range is invalid
         """
+        # Input validation (Phase 2 hardening)
+        if start_addr < 0 or end_addr < 0:
+            logger.warning(f"Negative address: {start_addr:#x} to {end_addr:#x}")
+            raise ValidationError(f"Negative addresses not allowed")
+
+        if start_addr >= end_addr:
+            logger.warning(f"Invalid address range: {start_addr:#x} >= {end_addr:#x}")
+            raise ValidationError(f"start_addr must be less than end_addr")
+
+        if len(perms) != 4 or perms[3] not in "ps":
+            logger.warning(f"Invalid permissions string: {perms}")
+            raise ValidationError(f"Invalid permissions (expected 4 chars like 'rw-p')")
+
+        if not isinstance(pathname, str):
+            logger.warning(f"Invalid pathname type: {type(pathname)}")
+            raise ValidationError(f"pathname must be string")
+
         size = end_addr - start_addr
 
         # Check for stack (near RSP/RBP)
@@ -123,7 +156,23 @@ class MemoryAnalyzer:
 
         Returns:
             List of anomaly descriptions
+
+        Raises:
+            ValidationError: If inputs are invalid
         """
+        # Input validation
+        if not isinstance(perms, str) or len(perms) != 4:
+            logger.warning(f"Invalid permissions: {perms}")
+            raise ValidationError(f"Invalid permissions string: {perms}")
+
+        if size < 0:
+            logger.warning(f"Negative size: {size}")
+            raise ValidationError(f"Region size cannot be negative: {size}")
+
+        if not isinstance(pathname, str):
+            logger.warning(f"Invalid pathname type: {type(pathname)}")
+            raise ValidationError(f"Pathname must be string")
+
         anomalies = []
 
         # Executable heap (code injection marker)
@@ -171,21 +220,41 @@ class MemoryAnalyzer:
 
         Returns:
             True if potential corruption detected
+
+        Raises:
+            ValidationError: If inputs are invalid
         """
-        # Executable heap
-        if region_type == MemoryRegionType.HEAP and "x" in perms:
-            return True
+        # Input validation
+        if not isinstance(perms, str) or len(perms) != 4:
+            logger.warning(f"Invalid permissions: {perms}")
+            raise ValidationError(f"Invalid permissions string: {perms}")
 
-        # RWX region (highly suspicious)
-        if "r" in perms and "w" in perms and "x" in perms:
-            return True
+        if not isinstance(pathname, str):
+            logger.warning(f"Invalid pathname type: {type(pathname)}")
+            raise ValidationError(f"Pathname must be string")
 
-        # Writable vdso/vsyscall (should be read-only)
-        if region_type in [MemoryRegionType.VDSO, MemoryRegionType.VSYSCALL]:
-            if "w" in perms:
+        try:
+            # Executable heap
+            if region_type == MemoryRegionType.HEAP and "x" in perms:
+                logger.warning(f"Executable heap detected: {pathname}")
                 return True
 
-        return False
+            # RWX region (highly suspicious)
+            if "r" in perms and "w" in perms and "x" in perms:
+                logger.warning(f"RWX region detected: {pathname}")
+                return True
+
+            # Writable vdso/vsyscall (should be read-only)
+            if region_type in [MemoryRegionType.VDSO, MemoryRegionType.VSYSCALL]:
+                if "w" in perms:
+                    logger.warning(f"Writable {region_type.value} detected: {pathname}")
+                    return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error checking corruption markers: {e}")
+            raise MemoryAnalysisError(f"Corruption check failed: {e}")
 
     @staticmethod
     def analyze_memory_region(
@@ -216,91 +285,141 @@ class MemoryAnalyzer:
                 'likely_corrupted': bool,
                 'anomalies': [str],
             }
+
+        Raises:
+            ValidationError: If inputs are invalid
+            MemoryAnalysisError: If analysis fails
         """
-        size = end_addr - start_addr
-        is_writable = "w" in perms
-        is_executable = "x" in perms
+        try:
+            # Input validation
+            if start_addr < 0 or end_addr < 0:
+                logger.error(f"Negative addresses: {start_addr:#x} to {end_addr:#x}")
+                raise ValidationError("Negative addresses not allowed")
 
-        region_type, confidence = MemoryAnalyzer.classify_region(
-            pathname, start_addr, end_addr, perms, offset, register_state
-        )
+            if start_addr >= end_addr:
+                logger.error(f"Invalid range: {start_addr:#x} >= {end_addr:#x}")
+                raise ValidationError("start_addr must be less than end_addr")
 
-        anomalies = MemoryAnalyzer.detect_anomalies(
-            region_type, perms, size, pathname
-        )
+            size = end_addr - start_addr
+            is_writable = "w" in perms
+            is_executable = "x" in perms
 
-        likely_corrupted = MemoryAnalyzer.check_corruption_markers(
-            region_type, perms, pathname
-        )
+            logger.debug(f"Analyzing region {pathname} ({start_addr:#x}-{end_addr:#x})")
 
-        return {
-            "region_type": region_type.value,
-            "confidence": confidence,
-            "is_writable": is_writable,
-            "is_executable": is_executable,
-            "likely_corrupted": likely_corrupted,
-            "anomalies": anomalies,
-            "size": size,
-            "start_addr": start_addr,
-            "end_addr": end_addr,
-        }
+            region_type, confidence = MemoryAnalyzer.classify_region(
+                pathname, start_addr, end_addr, perms, offset, register_state
+            )
+
+            anomalies = MemoryAnalyzer.detect_anomalies(
+                region_type, perms, size, pathname
+            )
+
+            likely_corrupted = MemoryAnalyzer.check_corruption_markers(
+                region_type, perms, pathname
+            )
+
+            result = {
+                "region_type": region_type.value,
+                "confidence": confidence,
+                "is_writable": is_writable,
+                "is_executable": is_executable,
+                "likely_corrupted": likely_corrupted,
+                "anomalies": anomalies,
+                "size": size,
+                "start_addr": start_addr,
+                "end_addr": end_addr,
+            }
+
+            logger.debug(
+                f"Analysis complete: {region_type.value} "
+                f"(confidence={confidence:.2f}, corrupted={likely_corrupted})"
+            )
+
+            return result
+
+        except (ValidationError, MemoryAnalysisError):
+            raise
+        except Exception as e:
+            logger.error(f"Error analyzing region {pathname}: {e}")
+            raise MemoryAnalysisError(f"Analysis failed for {pathname}: {e}")
 
     @staticmethod
-    def format_register_display(register_state: dict) -> str:
+    def format_register_display(register_state: Optional[dict] = None) -> str:
         """
         Format register state for display.
 
         Args:
-            register_state: Dict of register name → value
+            register_state: Dict of register name → value (or None)
 
         Returns:
             Formatted string for display
+
+        Raises:
+            ValidationError: If register_state is invalid type
         """
-        lines = []
+        try:
+            # Handle missing register state
+            if register_state is None:
+                logger.debug("No register state available")
+                return "No register state available from core dump"
 
-        # Group registers by type
-        gp_regs = ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp"]
-        ext_regs = ["r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
-        special = ["rip", "eflags"]
+            # Validate input
+            if not isinstance(register_state, dict):
+                logger.warning(f"Invalid register state type: {type(register_state)}")
+                raise ValidationError(f"register_state must be dict or None")
 
-        lines.append("General Purpose Registers:")
-        for i in range(0, len(gp_regs), 2):
-            reg1 = gp_regs[i]
-            reg2 = gp_regs[i + 1] if i + 1 < len(gp_regs) else None
+            lines = []
 
-            val1 = register_state.get(reg1)
-            val1_str = f"{val1:#018x}" if val1 is not None else "N/A"
+            # Group registers by type
+            gp_regs = ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp"]
+            ext_regs = ["r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
+            special = ["rip", "eflags"]
 
-            if reg2:
-                val2 = register_state.get(reg2)
-                val2_str = f"{val2:#018x}" if val2 is not None else "N/A"
-                lines.append(
-                    f"  {reg1:4s} = {val1_str}    {reg2:4s} = {val2_str}"
-                )
-            else:
-                lines.append(f"  {reg1:4s} = {val1_str}")
+            lines.append("General Purpose Registers:")
+            for i in range(0, len(gp_regs), 2):
+                reg1 = gp_regs[i]
+                reg2 = gp_regs[i + 1] if i + 1 < len(gp_regs) else None
 
-        lines.append("\nExtended Registers:")
-        for i in range(0, len(ext_regs), 2):
-            reg1 = ext_regs[i]
-            reg2 = ext_regs[i + 1] if i + 1 < len(ext_regs) else None
+                val1 = register_state.get(reg1)
+                val1_str = f"{val1:#018x}" if val1 is not None else "N/A"
 
-            val1 = register_state.get(reg1)
-            val1_str = f"{val1:#018x}" if val1 is not None else "N/A"
+                if reg2:
+                    val2 = register_state.get(reg2)
+                    val2_str = f"{val2:#018x}" if val2 is not None else "N/A"
+                    lines.append(
+                        f"  {reg1:4s} = {val1_str}    {reg2:4s} = {val2_str}"
+                    )
+                else:
+                    lines.append(f"  {reg1:4s} = {val1_str}")
 
-            if reg2:
-                val2 = register_state.get(reg2)
-                val2_str = f"{val2:#018x}" if val2 is not None else "N/A"
-                lines.append(
-                    f"  {reg1:4s} = {val1_str}    {reg2:4s} = {val2_str}"
-                )
-            else:
-                lines.append(f"  {reg1:4s} = {val1_str}")
+            lines.append("\nExtended Registers:")
+            for i in range(0, len(ext_regs), 2):
+                reg1 = ext_regs[i]
+                reg2 = ext_regs[i + 1] if i + 1 < len(ext_regs) else None
 
-        lines.append("\nSpecial Registers:")
-        for reg in special:
-            val = register_state.get(reg)
-            val_str = f"{val:#018x}" if val is not None else "N/A"
-            lines.append(f"  {reg:4s} = {val_str}")
+                val1 = register_state.get(reg1)
+                val1_str = f"{val1:#018x}" if val1 is not None else "N/A"
 
-        return "\n".join(lines)
+                if reg2:
+                    val2 = register_state.get(reg2)
+                    val2_str = f"{val2:#018x}" if val2 is not None else "N/A"
+                    lines.append(
+                        f"  {reg1:4s} = {val1_str}    {reg2:4s} = {val2_str}"
+                    )
+                else:
+                    lines.append(f"  {reg1:4s} = {val1_str}")
+
+            lines.append("\nSpecial Registers:")
+            for reg in special:
+                val = register_state.get(reg)
+                val_str = f"{val:#018x}" if val is not None else "N/A"
+                lines.append(f"  {reg:4s} = {val_str}")
+
+            logger.debug(f"Formatted {len(register_state)} registers")
+            return "\n".join(lines)
+
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error formatting registers: {e}")
+            raise MemoryAnalysisError(f"Register formatting failed: {e}")

@@ -3,9 +3,11 @@ Process database access layer for runtime analysis.
 
 Provides ProcessDatabase class for managing process snapshots, memory mappings,
 and backtrace decoding with parallel processing and caching.
+Includes comprehensive error handling and validation (Phase 2 hardening).
 """
 
 import asyncio
+import logging
 import re
 from typing import Optional
 
@@ -19,8 +21,16 @@ from blackadder.models import (
     ResolvedFrame,
     Binary,
 )
+from blackadder.exceptions import (
+    ValidationError,
+    DatabaseQueryError,
+    ParseError,
+    MemoryAnalysisError,
+)
 
 from .base import AsyncDatabaseManager
+
+logger = logging.getLogger("blackadder.db.process")
 
 
 class ProcessDatabase:
@@ -62,28 +72,84 @@ class ProcessDatabase:
 
         Returns:
             ProcessSnapshot with all MemoryMapping objects created
+
+        Raises:
+            ValidationError: If inputs are invalid
+            ParseError: If maps parsing fails
+            DatabaseQueryError: If database operation fails
         """
-        async with self.manager.get_session() as session:
-            # Create process snapshot
-            process = ProcessSnapshot(
-                pid=pid,
-                description=f"Process {pid}" if pid else "Offline analysis",
-            )
+        try:
+            # Input validation (Phase 2 hardening)
+            if pid is not None and not isinstance(pid, int):
+                logger.error(f"Invalid pid type: {type(pid)}")
+                raise ValidationError(f"pid must be int or None")
 
-            # Parse maps lines in thread pool (CPU-bound regex)
-            lines = maps_text.strip().split("\n")
-            parsed_maps = await asyncio.to_thread(self._parse_maps_lines, lines)
+            if pid is not None and pid < 0:
+                logger.warning(f"Negative pid: {pid}")
+                raise ValidationError(f"pid must be non-negative")
 
-            # Create MemoryMapping objects
-            for map_data in parsed_maps:
-                mapping = MemoryMapping(**map_data)
-                process.mappings.append(mapping)
+            if not isinstance(maps_text, str):
+                logger.error(f"Invalid maps_text type: {type(maps_text)}")
+                raise ValidationError(f"maps_text must be string")
 
-            session.add(process)
-            await session.commit()
-            await session.refresh(process)
+            if not maps_text.strip():
+                logger.warning("Empty maps_text")
+                raise ValidationError(f"maps_text cannot be empty")
 
-        return process
+            logger.debug(f"Loading maps for pid={pid}, {len(maps_text)} bytes")
+
+            async with self.manager.get_session() as session:
+                try:
+                    # Create process snapshot
+                    process = ProcessSnapshot(
+                        pid=pid,
+                        description=f"Process {pid}" if pid else "Offline analysis",
+                    )
+
+                    # Parse maps lines in thread pool (CPU-bound regex)
+                    lines = maps_text.strip().split("\n")
+                    parsed_maps = await asyncio.to_thread(self._parse_maps_lines, lines)
+
+                    if not parsed_maps:
+                        logger.warning(f"No valid maps parsed from {len(lines)} lines")
+                        raise ParseError(f"Failed to parse any memory mappings")
+
+                    # Create MemoryMapping objects
+                    for map_data in parsed_maps:
+                        try:
+                            mapping = MemoryMapping(**map_data)
+                            process.mappings.append(mapping)
+                        except Exception as e:
+                            logger.warning(f"Failed to create mapping: {e}")
+                            continue
+
+                    if len(process.mappings) > self.config.max_memory_regions:
+                        logger.error(
+                            f"Too many regions: {len(process.mappings)} > {self.config.max_memory_regions}"
+                        )
+                        raise ValidationError(
+                            f"Process has too many regions: {len(process.mappings)} "
+                            f"(max {self.config.max_memory_regions})"
+                        )
+
+                    session.add(process)
+                    await session.commit()
+                    await session.refresh(process)
+
+                    logger.info(f"Loaded process {pid} with {len(process.mappings)} mappings")
+                    return process
+
+                except (ValidationError, ParseError, Exception) as e:
+                    logger.error(f"Database error loading maps: {e}")
+                    if isinstance(e, (ValidationError, ParseError)):
+                        raise
+                    raise DatabaseQueryError(f"Failed to store process snapshot: {e}")
+
+        except (ValidationError, ParseError, DatabaseQueryError):
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error loading maps: {e}")
+            raise ValidationError(f"Maps loading failed: {e}")
 
     async def address_to_binary(
         self, pid: int, addr: int
@@ -99,21 +165,54 @@ class ProcessDatabase:
 
         Returns:
             Tuple of (binary_path, offset) or None if address not found
+
+        Raises:
+            ValidationError: If inputs are invalid
+            DatabaseQueryError: If query fails
         """
-        async with self.manager.get_session() as session:
-            statement = select(MemoryMapping).where(
-                (MemoryMapping.process_id == pid)
-                & (MemoryMapping.start_addr <= addr)
-                & (MemoryMapping.end_addr > addr)
-            )
-            result = await session.exec(statement)
-            mapping = result.first()
+        try:
+            # Input validation (Phase 2 hardening)
+            if not isinstance(pid, int):
+                logger.warning(f"Invalid pid type: {type(pid)}")
+                raise ValidationError(f"pid must be int")
 
-            if mapping:
-                offset = addr - mapping.start_addr + mapping.offset
-                return mapping.pathname, offset
+            if pid <= 0:
+                logger.warning(f"Invalid pid: {pid} (must be positive)")
+                raise ValidationError(f"pid must be positive")
 
-        return None
+            if not isinstance(addr, int):
+                logger.warning(f"Invalid addr type: {type(addr)}")
+                raise ValidationError(f"addr must be int")
+
+            if addr < 0:
+                logger.warning(f"Negative address: {addr}")
+                raise ValidationError(f"addr must be non-negative")
+
+            logger.debug(f"Resolving address {addr:#x} in process {pid}")
+
+            async with self.manager.get_session() as session:
+                statement = select(MemoryMapping).where(
+                    (MemoryMapping.process_id == pid)
+                    & (MemoryMapping.start_addr <= addr)
+                    & (MemoryMapping.end_addr > addr)
+                )
+                result = await session.exec(statement)
+                mapping = result.first()
+
+                if mapping:
+                    offset = addr - mapping.start_addr + mapping.offset
+                    logger.debug(f"Resolved to {mapping.pathname} at offset {offset:#x}")
+                    return mapping.pathname, offset
+                else:
+                    logger.debug(f"Address {addr:#x} not found in any mapping")
+
+            return None
+
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error resolving address: {e}")
+            raise DatabaseQueryError(f"Address resolution failed: {e}")
 
     async def decode_backtrace(
         self, pid: int, addresses: list[int]
@@ -136,24 +235,79 @@ class ProcessDatabase:
 
         Returns:
             List of ResolvedFrame objects sorted by frame number
+
+        Raises:
+            ValidationError: If inputs are invalid
         """
-        # Create concurrent tasks for each frame
-        # Each task is limited by subprocess_sem and uses symbol cache
-        tasks = [
-            self._resolve_frame(pid, frame_num, addr)
-            for frame_num, addr in enumerate(addresses)
-        ]
+        try:
+            # Input validation (Phase 2 hardening)
+            if not isinstance(pid, int):
+                logger.error(f"Invalid pid type: {type(pid)}")
+                raise ValidationError(f"pid must be int")
 
-        # Gather with return_exceptions so one failure doesn't cancel all
-        frames = await asyncio.gather(*tasks, return_exceptions=True)
+            if pid <= 0:
+                logger.warning(f"Invalid pid: {pid} (must be positive)")
+                raise ValidationError(f"pid must be positive")
 
-        # Filter out exceptions and return valid frames
-        valid_frames = [f for f in frames if isinstance(f, ResolvedFrame)]
+            if not isinstance(addresses, list):
+                logger.error(f"Invalid addresses type: {type(addresses)}")
+                raise ValidationError(f"addresses must be list")
 
-        # Sort by frame number for output
-        valid_frames.sort(key=lambda f: f.frame_num)
+            if not addresses:
+                logger.debug("Empty address list")
+                return []
 
-        return valid_frames
+            # Validate address types
+            for idx, addr in enumerate(addresses):
+                if not isinstance(addr, int):
+                    logger.warning(f"Invalid address type at {idx}: {type(addr)}")
+                    raise ValidationError(f"Address {idx} is not int: {type(addr)}")
+
+                if addr < 0:
+                    logger.warning(f"Negative address at {idx}: {addr}")
+                    raise ValidationError(f"Address {idx} is negative: {addr}")
+
+            if len(addresses) > self.config.max_backtraces_cached:
+                logger.warning(f"Too many addresses: {len(addresses)} > {self.config.max_backtraces_cached}")
+                raise ValidationError(
+                    f"Too many frames to decode: {len(addresses)} "
+                    f"(max {self.config.max_backtraces_cached})"
+                )
+
+            logger.debug(f"Decoding backtrace for pid={pid}, {len(addresses)} frames")
+
+            # Create concurrent tasks for each frame
+            # Each task is limited by subprocess_sem and uses symbol cache
+            tasks = [
+                self._resolve_frame(pid, frame_num, addr)
+                for frame_num, addr in enumerate(addresses)
+            ]
+
+            # Gather with return_exceptions so one failure doesn't cancel all
+            frames = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Filter out exceptions and return valid frames
+            valid_frames = []
+            failed_frames = 0
+
+            for frame_result in frames:
+                if isinstance(frame_result, ResolvedFrame):
+                    valid_frames.append(frame_result)
+                else:
+                    logger.debug(f"Frame resolution failed: {frame_result}")
+                    failed_frames += 1
+
+            # Sort by frame number for output
+            valid_frames.sort(key=lambda f: f.frame_num)
+
+            logger.info(f"Decoded {len(valid_frames)} frames ({failed_frames} failed)")
+            return valid_frames
+
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error decoding backtrace: {e}")
+            raise ValidationError(f"Backtrace decoding failed: {e}")
 
     async def _resolve_frame(
         self, pid: int, frame_num: int, addr: int
@@ -203,27 +357,51 @@ class ProcessDatabase:
 
         Returns:
             Symbol name or "???" if not found
+
+        Raises:
+            ValidationError: If inputs are invalid
         """
-        cache_key = (binary_path, offset)
+        try:
+            # Input validation (Phase 2 hardening)
+            if not isinstance(binary_path, str):
+                logger.warning(f"Invalid binary_path type: {type(binary_path)}")
+                return "???"
 
-        # Check cache first (fast path)
-        if cache_key in self.symbol_cache:
-            return self.symbol_cache[cache_key]
+            if not isinstance(offset, int):
+                logger.warning(f"Invalid offset type: {type(offset)}")
+                return "???"
 
-        # Resolve via subprocess (with semaphore limit)
-        # Import here to avoid circular import
-        from blackadder.binutils import resolve_symbol
+            if offset < 0:
+                logger.warning(f"Negative offset: {offset}")
+                return "???"
 
-        async with self.subprocess_sem:
-            symbol = await resolve_symbol(binary_path, offset, self.config)
+            cache_key = (binary_path, offset)
 
-        # Cache result with size limit
-        if len(self.symbol_cache) > self.config.max_symbol_cache_size:
-            # Simple FIFO eviction (could use OrderedDict for true LRU)
-            self.symbol_cache.pop(next(iter(self.symbol_cache)))
+            # Check cache first (fast path)
+            if cache_key in self.symbol_cache:
+                logger.debug(f"Cache hit for {binary_path}:{offset:#x}")
+                return self.symbol_cache[cache_key]
 
-        self.symbol_cache[cache_key] = symbol
-        return symbol
+            # Resolve via subprocess (with semaphore limit)
+            # Import here to avoid circular import
+            from blackadder.binutils import resolve_symbol
+
+            async with self.subprocess_sem:
+                symbol = await resolve_symbol(binary_path, offset, self.config)
+
+            # Cache result with size limit
+            if len(self.symbol_cache) > self.config.max_symbol_cache_size:
+                # Simple FIFO eviction (could use OrderedDict for true LRU)
+                evicted = self.symbol_cache.pop(next(iter(self.symbol_cache)))
+                logger.debug(f"Evicted symbol cache entry")
+
+            self.symbol_cache[cache_key] = symbol
+            logger.debug(f"Cached symbol: {binary_path}:{offset:#x} -> {symbol}")
+            return symbol
+
+        except Exception as e:
+            logger.warning(f"Error getting cached symbol: {e}")
+            return "???"
 
     async def analyze_memory_layout(
         self,
@@ -308,35 +486,77 @@ class ProcessDatabase:
 
         Returns:
             ProcessSnapshot with memory mappings from core dump
+
+        Raises:
+            ValidationError: If core_path is invalid
+            ParseError: If core dump parsing fails
+            DatabaseQueryError: If database operation fails
         """
-        from blackadder.binutils.coredump import CoreDumpParser
+        try:
+            # Input validation (Phase 2 hardening)
+            if not isinstance(core_path, str):
+                logger.error(f"Invalid core_path type: {type(core_path)}")
+                raise ValidationError(f"core_path must be string")
 
-        # Parse the core dump
-        parser = CoreDumpParser(self.config)
-        core_data = await parser.parse_core_dump(core_path)
+            if not core_path.strip():
+                logger.error("Empty core_path")
+                raise ValidationError(f"core_path cannot be empty")
 
-        if not core_data:
-            raise ValueError(f"Failed to parse core dump: {core_path}")
+            logger.debug(f"Loading core dump: {core_path}")
 
-        # Create process snapshot
-        async with self.manager.get_session() as session:
-            process = ProcessSnapshot(
-                pid=core_data.get("pid"),
-                description=f"Core dump from {core_path}",
-                source_type="core_dump",
-                source_path=core_path,
-            )
+            from blackadder.binutils.coredump import CoreDumpParser
 
-            # Create memory mappings from core dump segments
-            for map_data in core_data["mappings"]:
-                mapping = MemoryMapping(**map_data)
-                process.mappings.append(mapping)
+            # Parse the core dump (error handling via CoreDumpParser)
+            parser = CoreDumpParser(self.config)
+            core_data = await parser.parse_core_dump(core_path)
 
-            session.add(process)
-            await session.commit()
-            await session.refresh(process)
+            if not core_data or not core_data.get("mappings"):
+                logger.error(f"No mappings extracted from core dump: {core_path}")
+                raise ParseError(f"Failed to extract mappings from core dump")
 
-        return process
+            # Create process snapshot
+            async with self.manager.get_session() as session:
+                try:
+                    process = ProcessSnapshot(
+                        pid=core_data.get("pid"),
+                        description=f"Core dump from {core_path}",
+                        source_type="core_dump",
+                        source_path=core_path,
+                    )
+
+                    # Create memory mappings from core dump segments
+                    for map_data in core_data["mappings"]:
+                        try:
+                            mapping = MemoryMapping(**map_data)
+                            process.mappings.append(mapping)
+                        except Exception as e:
+                            logger.warning(f"Failed to create mapping: {e}")
+                            continue
+
+                    if len(process.mappings) > self.config.max_memory_regions:
+                        logger.error(f"Too many regions: {len(process.mappings)} > {self.config.max_memory_regions}")
+                        raise ValidationError(
+                            f"Core dump has too many regions: {len(process.mappings)}"
+                        )
+
+                    session.add(process)
+                    await session.commit()
+                    await session.refresh(process)
+
+                    logger.info(f"Loaded core dump with {len(process.mappings)} mappings")
+                    return process
+
+                except (ValidationError, ParseError, Exception) as e:
+                    logger.error(f"Database error loading core dump: {e}")
+                    if isinstance(e, (ValidationError, ParseError)):
+                        raise
+                    raise DatabaseQueryError(f"Failed to store core dump snapshot: {e}")
+
+        except (ValidationError, ParseError, DatabaseQueryError):
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error loading core dump: {e}")
+            raise ParseError(f"Core dump loading failed: {e}")
 
     async def identify_process_binaries_fuzzy(
         self,
@@ -445,39 +665,80 @@ class ProcessDatabase:
 
         Returns:
             List of dicts with keys: start_addr, end_addr, perms, offset, pathname
+
+        Raises:
+            ParseError: If lines is invalid type
         """
-        # Regex pattern for /proc/maps format
-        maps_pattern = re.compile(
-            r"^([0-9a-f]+)-([0-9a-f]+)\s+"
-            r"([r\-][w\-][x\-][ps])\s+"
-            r"([0-9a-f]+)\s+"
-            r"[0-9a-f]+:[0-9a-f]+\s+"
-            r"(\d+)\s+"
-            r"(.*)$"
-        )
+        try:
+            # Input validation (Phase 2 hardening)
+            if not isinstance(lines, list):
+                logger.warning(f"Invalid lines type: {type(lines)}")
+                raise ParseError(f"lines must be list")
 
-        parsed = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
+            if not lines:
+                logger.debug("Empty lines list for parsing")
+                return []
 
-            m = maps_pattern.match(line)
-            if m:
-                start_addr = int(m.group(1), 16)
-                end_addr = int(m.group(2), 16)
-                perms = m.group(3)
-                offset = int(m.group(4), 16)
-                pathname = m.group(6).strip() or "[anonymous]"
+            # Regex pattern for /proc/maps format
+            maps_pattern = re.compile(
+                r"^([0-9a-f]+)-([0-9a-f]+)\s+"
+                r"([r\-][w\-][x\-][ps])\s+"
+                r"([0-9a-f]+)\s+"
+                r"[0-9a-f]+:[0-9a-f]+\s+"
+                r"(\d+)\s+"
+                r"(.*)$"
+            )
 
-                parsed.append(
-                    {
-                        "start_addr": start_addr,
-                        "end_addr": end_addr,
-                        "perms": perms,
-                        "offset": offset,
-                        "pathname": pathname,
-                    }
-                )
+            parsed = []
+            failed_lines = 0
 
-        return parsed
+            for idx, line in enumerate(lines):
+                if not isinstance(line, str):
+                    logger.warning(f"Non-string line at index {idx}: {type(line)}")
+                    failed_lines += 1
+                    continue
+
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    m = maps_pattern.match(line)
+                    if m:
+                        start_addr = int(m.group(1), 16)
+                        end_addr = int(m.group(2), 16)
+                        perms = m.group(3)
+                        offset = int(m.group(4), 16)
+                        pathname = m.group(6).strip() or "[anonymous]"
+
+                        # Validate parsed values
+                        if start_addr >= end_addr:
+                            logger.warning(f"Invalid address range at line {idx}: {start_addr} >= {end_addr}")
+                            failed_lines += 1
+                            continue
+
+                        parsed.append(
+                            {
+                                "start_addr": start_addr,
+                                "end_addr": end_addr,
+                                "perms": perms,
+                                "offset": offset,
+                                "pathname": pathname,
+                            }
+                        )
+                    else:
+                        logger.debug(f"Line {idx} doesn't match /proc/maps format")
+                        failed_lines += 1
+
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"Error parsing line {idx}: {e}")
+                    failed_lines += 1
+
+            logger.debug(f"Parsed {len(parsed)} mappings from {len(lines)} lines ({failed_lines} failed)")
+            return parsed
+
+        except ParseError:
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error parsing maps: {e}")
+            raise ParseError(f"Maps parsing failed: {e}")
