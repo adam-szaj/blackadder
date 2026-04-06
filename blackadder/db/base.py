@@ -5,11 +5,10 @@ Provides AsyncDatabaseManager for managing async SQLite connections via aiosqlit
 Supports both rootfs and process databases with connection pooling.
 """
 
-import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
 

@@ -6,10 +6,9 @@ Uses Pydantic Settings for type-safe config loading from environment,
 """
 
 import os
-from typing import Optional
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class BlackadderConfig(BaseSettings):
@@ -161,7 +160,7 @@ class BlackadderConfig(BaseSettings):
         description="Log all SQL queries",
     )
 
-    log_file: Optional[str] = Field(
+    log_file: str | None = Field(
         default=None,
         description="Optional path to log file",
     )

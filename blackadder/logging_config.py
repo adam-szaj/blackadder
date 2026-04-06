@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-def setup_logging(log_level: str = "INFO", log_file: str = None) -> logging.Logger:
+def setup_logging(log_level: str = "INFO", log_file: str | None = None) -> logging.Logger:
     """
     Set up logging configuration.
 

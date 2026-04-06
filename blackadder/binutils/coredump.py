@@ -6,20 +6,13 @@ allowing address resolution on offline crashes.
 Includes comprehensive error handling and validation (Phase 2 hardening).
 """
 
-import asyncio
 import logging
 import re
 from pathlib import Path
-from typing import Optional
 
 from blackadder.binutils.parser import BinToolsParser
 from blackadder.exceptions import (
-    FileNotFoundError,
-    FileAccessError,
-    FileTooLargeError,
     FileFormatError,
-    ELFCoreDumpError,
-    ParseError,
 )
 from blackadder.results import CoreDumpResult
 
@@ -56,7 +49,7 @@ class CoreDumpParser:
             logger.error("invalid_core_path_type", extra={
                 "type": type(core_path).__name__,
             })
-            raise FileFormatError(f"core_path must be string")
+            raise FileFormatError("core_path must be string")
 
         core_file = Path(core_path)
 
@@ -183,7 +176,7 @@ class CoreDumpParser:
 
     async def _get_readelf_output(
         self, core_path: str, args: list[str]
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get readelf output for core dump.
 

@@ -11,15 +11,10 @@ import hashlib
 import logging
 import re
 from pathlib import Path
-from typing import Optional
 
 from blackadder.binutils.parser import BinToolsParser
 from blackadder.exceptions import (
-    FileNotFoundError,
-    FileAccessError,
-    FileTooLargeError,
     FileFormatError,
-    ParseError,
 )
 from blackadder.results import FingerprintResult
 
@@ -60,7 +55,7 @@ class FunctionHasher:
             logger.error("invalid_binary_path_type", extra={
                 "type": type(binary_path).__name__,
             })
-            raise FileFormatError(f"binary_path must be string")
+            raise FileFormatError("binary_path must be string")
 
         binary_file = Path(binary_path)
 

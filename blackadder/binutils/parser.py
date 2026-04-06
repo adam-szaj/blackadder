@@ -7,7 +7,7 @@ Implements subprocess pooling via semaphore and CPU-bound work via thread pool.
 
 import asyncio
 import re
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 class BinToolsParser:
@@ -56,7 +56,7 @@ class BinToolsParser:
     async def run_command_limited(
         self,
         cmd: list[str],
-        on_line: Optional[Callable[[str], None]] = None,
+        on_line: Callable[[str], None] | None = None,
     ) -> list[str]:
         """
         Execute command with subprocess limiting (semaphore).
@@ -77,7 +77,7 @@ class BinToolsParser:
     async def _run_command_internal(
         self,
         cmd: list[str],
-        on_line: Optional[Callable[[str], None]] = None,
+        on_line: Callable[[str], None] | None = None,
     ) -> list[str]:
         """
         Internal: execute command and stream output asynchronously.
@@ -197,7 +197,7 @@ class BinToolsParser:
         sections = await asyncio.to_thread(parse_sections, lines)
         return sections
 
-    async def parse_readelf_debug_link(self, binary_path: str) -> Optional[str]:
+    async def parse_readelf_debug_link(self, binary_path: str) -> str | None:
         """
         Extract .gnu_debuglink section using readelf.
 
@@ -223,7 +223,7 @@ class BinToolsParser:
 
 
 # Global parser instance (initialized by config system)
-_parser: Optional[BinToolsParser] = None
+_parser: BinToolsParser | None = None
 
 
 def init_parser(config):

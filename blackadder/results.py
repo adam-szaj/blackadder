@@ -8,7 +8,6 @@ These dataclasses provide structured returns for operations where:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -16,8 +15,8 @@ class FingerprintResult:
     """Result of computing function fingerprints from a binary."""
     fingerprints: dict[str, str] = field(default_factory=dict)
     status: str = "success"  # "success", "file_not_found", "not_elf", "no_functions", "parse_error", "permission_denied"
-    reason: Optional[str] = None
-    binary_path: Optional[str] = None
+    reason: str | None = None
+    binary_path: str | None = None
 
 
 @dataclass
@@ -25,11 +24,11 @@ class CoreDumpResult:
     """Result of parsing an ELF core dump."""
     mappings: list[dict] = field(default_factory=list)
     elf_headers: dict = field(default_factory=dict)
-    pid: Optional[int] = None
-    signal: Optional[int] = None
+    pid: int | None = None
+    signal: int | None = None
     status: str = "success"  # "success", "file_not_found", "not_elf", "not_core_dump", "parse_error", "corrupted"
-    reason: Optional[str] = None
-    core_path: Optional[str] = None
+    reason: str | None = None
+    core_path: str | None = None
 
 
 @dataclass
@@ -45,9 +44,9 @@ class SymbolResolutionResult:
     """Result of resolving an address to a symbol."""
     symbol: str = "???"
     status: str = "success"  # "success", "not_found", "binary_not_found", "error"
-    reason: Optional[str] = None
-    binary_path: Optional[str] = None
-    offset: Optional[int] = None
+    reason: str | None = None
+    binary_path: str | None = None
+    offset: int | None = None
 
 
 @dataclass
@@ -66,4 +65,4 @@ class MemoryAnalysisResult:
     corruption_count: int = 0
     corruption_risk: float = 0.0
     status: str = "success"  # "success", "invalid_process_id", "error"
-    reason: Optional[str] = None
+    reason: str | None = None

@@ -7,8 +7,8 @@ and function fingerprints extracted from binaries in the rootfs.
 
 from sqlmodel import select
 
-from blackadder.models import Binary, FunctionFingerprint
 from blackadder.binutils.hasher import FunctionHasher
+from blackadder.models import Binary, FunctionFingerprint
 
 from .base import AsyncDatabaseManager
 
@@ -42,10 +42,12 @@ class RootfsDatabase:
         """
         # Compute fingerprints
         hasher = FunctionHasher(self.config)
-        fingerprints = await hasher.compute_fingerprints(binary_path)
+        fp_result = await hasher.compute_fingerprints(binary_path)
 
-        if not fingerprints:
+        if fp_result.status != "success" or not fp_result.fingerprints:
             return 0
+
+        fingerprints = fp_result.fingerprints
 
         # Store in database
         async with self.manager.get_session() as session:
@@ -81,7 +83,7 @@ class RootfsDatabase:
         async with self.manager.get_session() as session:
             # Exact match on name
             statement = select(Binary).where(Binary.name == name)
-            result = await session.exec(statement)
+            result = await session.exec(statement)  # type: ignore
             binaries = result.all()
 
         return binaries
@@ -98,7 +100,7 @@ class RootfsDatabase:
         """
         async with self.manager.get_session() as session:
             statement = select(Binary).where(Binary.md5sum == md5sum)
-            result = await session.exec(statement)
+            result = await session.exec(statement)  # type: ignore
             binary = result.first()
 
         return binary
@@ -117,7 +119,7 @@ class RootfsDatabase:
             statement = select(FunctionFingerprint).where(
                 FunctionFingerprint.binary_id == binary_id
             )
-            result = await session.exec(statement)
+            result = await session.exec(statement)  # type: ignore
             fp = result.first()
 
         return fp is not None

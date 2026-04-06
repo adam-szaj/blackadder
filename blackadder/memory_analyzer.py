@@ -7,14 +7,12 @@ Includes comprehensive error handling and validation (Phase 2 hardening).
 
 import logging
 import re
-from typing import Optional
 
-from blackadder.models import MemoryRegionType
 from blackadder.exceptions import (
-    ValidationError,
-    InvalidArgumentError,
     MemoryAnalysisError,
+    ValidationError,
 )
+from blackadder.models import MemoryRegionType
 
 logger = logging.getLogger("blackadder.analyzer")
 
@@ -27,13 +25,7 @@ class MemoryAnalyzer:
 
     @staticmethod
     def classify_region(
-        pathname: str,
-        start_addr: int,
-        end_addr: int,
-        perms: str,
-        offset: int,
-        register_state: Optional[dict] = None,
-    ) -> tuple[MemoryRegionType, float]:
+        pathname: str, start_addr: int, end_addr: int, perms: str, offset: int, register_state: dict | None = None, ) -> tuple[MemoryRegionType, float]:
         """
         Classify memory region type and confidence.
 
@@ -69,23 +61,18 @@ class MemoryAnalyzer:
         # Input validation (Phase 2 hardening)
         if start_addr < 0 or end_addr < 0:
             logger.warning("negative_address_in_region", extra={
-                "start_addr": start_addr,
-                "end_addr": end_addr,
-            })
-            raise ValidationError(f"Negative addresses not allowed")
+                "start_addr": start_addr, "end_addr": end_addr, })
+            raise ValidationError("Negative addresses not allowed")
 
         if start_addr >= end_addr:
             logger.warning("invalid_address_range_in_region", extra={
-                "start_addr": start_addr,
-                "end_addr": end_addr,
-            })
-            raise ValidationError(f"start_addr must be less than end_addr")
+                "start_addr": start_addr, "end_addr": end_addr, })
+            raise ValidationError("start_addr must be less than end_addr")
 
         if len(perms) != 4 or perms[3] not in "ps":
             logger.warning("invalid_permissions_string", extra={
-                "perms": perms,
-            })
-            raise ValidationError(f"Invalid permissions (expected 4 chars like 'rw-p')")
+                "perms": perms, })
+            raise ValidationError("Invalid permissions (expected 4 chars like 'rw-p')")
 
         size = end_addr - start_addr
 
@@ -144,11 +131,7 @@ class MemoryAnalyzer:
 
     @staticmethod
     def detect_anomalies(
-        region_type: MemoryRegionType,
-        perms: str,
-        size: int,
-        pathname: str,
-    ) -> list[str]:
+        region_type: MemoryRegionType, perms: str, size: int, pathname: str, ) -> list[str]:
         """
         Detect potential memory anomalies.
 
@@ -173,9 +156,7 @@ class MemoryAnalyzer:
 
         # Writable code section
         if region_type in [
-            MemoryRegionType.TEXT,
-            MemoryRegionType.MMAP,
-        ] and "x" in perms and "w" in perms:
+            MemoryRegionType.TEXT, MemoryRegionType.MMAP, ] and "x" in perms and "w" in perms:
             anomalies.append("Writable executable region (unusual)")
 
         # Oversized region (> 1GB)
@@ -198,10 +179,7 @@ class MemoryAnalyzer:
 
     @staticmethod
     def check_corruption_markers(
-        region_type: MemoryRegionType,
-        perms: str,
-        pathname: str,
-    ) -> bool:
+        region_type: MemoryRegionType, perms: str, pathname: str, ) -> bool:
         """
         Check for common memory corruption patterns.
 
@@ -216,37 +194,27 @@ class MemoryAnalyzer:
         # Executable heap
         if region_type == MemoryRegionType.HEAP and "x" in perms:
             logger.warning("executable_heap_detected", extra={
-                "pathname": pathname,
-            })
+                "pathname": pathname, })
             return True
 
         # RWX region (highly suspicious)
         if "r" in perms and "w" in perms and "x" in perms:
             logger.warning("rwx_region_detected", extra={
-                "pathname": pathname,
-            })
+                "pathname": pathname, })
             return True
 
         # Writable vdso/vsyscall (should be read-only)
         if region_type in [MemoryRegionType.VDSO, MemoryRegionType.VSYSCALL]:
             if "w" in perms:
                 logger.warning("writable_system_region_detected", extra={
-                    "region_type": region_type.value,
-                    "pathname": pathname,
-                })
+                    "region_type": region_type.value, "pathname": pathname, })
                 return True
 
         return False
 
     @staticmethod
     def analyze_memory_region(
-        pathname: str,
-        start_addr: int,
-        end_addr: int,
-        perms: str,
-        offset: int,
-        register_state: Optional[dict] = None,
-    ) -> dict:
+        pathname: str, start_addr: int, end_addr: int, perms: str, offset: int, register_state: dict | None = None, ) -> dict:
         """
         Perform full analysis on a memory region.
 
@@ -260,13 +228,7 @@ class MemoryAnalyzer:
 
         Returns:
             {
-                'region_type': MemoryRegionType,
-                'confidence': float,
-                'is_writable': bool,
-                'is_executable': bool,
-                'likely_corrupted': bool,
-                'anomalies': [str],
-            }
+                'region_type': MemoryRegionType, 'confidence': float, 'is_writable': bool, 'is_executable': bool, 'likely_corrupted': bool, 'anomalies': [str], }
 
         Raises:
             ValidationError: If inputs are invalid
@@ -274,16 +236,12 @@ class MemoryAnalyzer:
         # Input validation
         if start_addr < 0 or end_addr < 0:
             logger.warning("negative_addresses_in_analysis", extra={
-                "start_addr": start_addr,
-                "end_addr": end_addr,
-            })
+                "start_addr": start_addr, "end_addr": end_addr, })
             raise ValidationError("Negative addresses not allowed")
 
         if start_addr >= end_addr:
             logger.warning("invalid_address_range_in_analysis", extra={
-                "start_addr": start_addr,
-                "end_addr": end_addr,
-            })
+                "start_addr": start_addr, "end_addr": end_addr, })
             raise ValidationError("start_addr must be less than end_addr")
 
         size = end_addr - start_addr
@@ -291,12 +249,7 @@ class MemoryAnalyzer:
         is_executable = "x" in perms
 
         logger.debug("region_analysis_started", extra={
-            "pathname": pathname,
-            "start_addr": start_addr,
-            "end_addr": end_addr,
-            "size": size,
-            "perms": perms,
-        })
+            "pathname": pathname, "start_addr": start_addr, "end_addr": end_addr, "size": size, "perms": perms, })
 
         region_type, confidence = MemoryAnalyzer.classify_region(
             pathname, start_addr, end_addr, perms, offset, register_state
@@ -311,29 +264,15 @@ class MemoryAnalyzer:
         )
 
         result = {
-            "region_type": region_type.value,
-            "confidence": confidence,
-            "is_writable": is_writable,
-            "is_executable": is_executable,
-            "likely_corrupted": likely_corrupted,
-            "anomalies": anomalies,
-            "size": size,
-            "start_addr": start_addr,
-            "end_addr": end_addr,
-        }
+            "region_type": region_type.value, "confidence": confidence, "is_writable": is_writable, "is_executable": is_executable, "likely_corrupted": likely_corrupted, "anomalies": anomalies, "size": size, "start_addr": start_addr, "end_addr": end_addr, }
 
         logger.debug("region_analysis_completed", extra={
-            "pathname": pathname,
-            "region_type": region_type.value,
-            "confidence": confidence,
-            "anomaly_count": len(anomalies),
-            "likely_corrupted": likely_corrupted,
-        })
+            "pathname": pathname, "region_type": region_type.value, "confidence": confidence, "anomaly_count": len(anomalies), "likely_corrupted": likely_corrupted, })
 
         return result
 
     @staticmethod
-    def format_register_display(register_state: Optional[dict] = None) -> str:
+    def format_register_display(register_state: dict | None = None) -> str:
         """
         Format register state for display.
 

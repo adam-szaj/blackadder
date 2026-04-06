@@ -9,22 +9,20 @@ Includes comprehensive error handling and validation (Phase 2 hardening).
 import asyncio
 import logging
 import re
-from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
+from blackadder.exceptions import (
+    ParseError,
+    ValidationError,
+)
 from blackadder.models import (
-    ProcessSnapshot,
+    Binary,
     MemoryMapping,
     ProcessBinary,
+    ProcessSnapshot,
     ResolvedFrame,
-    Binary,
-)
-from blackadder.exceptions import (
-    ValidationError,
-    ParseError,
 )
 
 from .base import AsyncDatabaseManager
@@ -59,7 +57,7 @@ class ProcessDatabase:
         # Avoids repeated subprocess calls for same symbol
         self.symbol_cache: dict[tuple[str, int], str] = {}
 
-    async def load_maps(self, pid: Optional[int], maps_text: str) -> ProcessSnapshot:
+    async def load_maps(self, pid: int | None, maps_text: str) -> ProcessSnapshot:
         """
         Parse /proc/PID/maps and create ProcessSnapshot with MemoryMappings.
 
@@ -79,11 +77,11 @@ class ProcessDatabase:
         # Input validation
         if pid is not None and pid < 0:
             logger.warning("negative_pid", extra={"pid": pid})
-            raise ValidationError(f"pid must be non-negative")
+            raise ValidationError("pid must be non-negative")
 
         if not maps_text or not maps_text.strip():
             logger.warning("empty_maps_text")
-            raise ValidationError(f"maps_text cannot be empty")
+            raise ValidationError("maps_text cannot be empty")
 
         logger.debug("loading_maps", extra={
             "pid": pid,
@@ -105,7 +103,7 @@ class ProcessDatabase:
                 logger.warning("no_valid_maps_parsed", extra={
                     "total_lines": len(lines),
                 })
-                raise ParseError(f"Failed to parse any memory mappings")
+                raise ParseError("Failed to parse any memory mappings")
 
             # Create MemoryMapping objects (continue on error)
             skipped_count = 0
@@ -141,21 +139,21 @@ class ProcessDatabase:
                 "process_id": process_id,
             })
 
-        # Re-fetch the process with eager-loaded relationships
-        # selectinload() fetches the relationship in a separate query before session closes
+        # Re-fetch the process to ensure mappings are accessible
+        # Note: AsyncSession.exec is provided by sqlmodel but not in type stubs
         async with self.manager.get_session() as session:
             statement = select(ProcessSnapshot).where(
                 ProcessSnapshot.id == process_id
-            ).options(selectinload(ProcessSnapshot.mappings))
+            )
 
-            result = await session.exec(statement)
+            result = await session.exec(statement)  # type: ignore
             process = result.first()
 
         return process
 
     async def address_to_binary(
         self, pid: int, addr: int
-    ) -> Optional[tuple[str, int]]:
+    ) -> tuple[str, int] | None:
         """
         Resolve an address to its binary path and offset.
 
@@ -179,7 +177,7 @@ class ProcessDatabase:
                 & (MemoryMapping.start_addr <= addr)
                 & (MemoryMapping.end_addr > addr)
             )
-            result = await session.exec(statement)
+            result = await session.exec(statement)  # type: ignore
             mapping = result.first()
 
             if mapping:
@@ -226,7 +224,7 @@ class ProcessDatabase:
         # Input validation
         if pid <= 0:
             logger.warning("invalid_pid", extra={"pid": pid})
-            raise ValidationError(f"pid must be positive")
+            raise ValidationError("pid must be positive")
 
         if not addresses:
             logger.debug("empty_address_list")
@@ -373,7 +371,7 @@ class ProcessDatabase:
     async def analyze_memory_layout(
         self,
         process_id: int,
-        register_state: Optional[dict] = None,
+        register_state: dict | None = None,
     ) -> dict:
         """
         Analyze and classify all memory regions (Phase 2.3).
@@ -404,7 +402,7 @@ class ProcessDatabase:
             statement = select(MemoryMapping).where(
                 MemoryMapping.process_id == process_id
             )
-            result = await session.exec(statement)
+            result = await session.exec(statement)  # type: ignore
             mappings = result.all()
 
             analyzer = MemoryAnalyzer(self.config)
@@ -482,7 +480,7 @@ class ProcessDatabase:
         # Input validation
         if not core_path or not core_path.strip():
             logger.warning("empty_core_path")
-            raise ValidationError(f"core_path cannot be empty")
+            raise ValidationError("core_path cannot be empty")
 
         logger.debug("loading_core_dump", extra={"core_path": core_path})
 
@@ -504,7 +502,7 @@ class ProcessDatabase:
             logger.warning("no_mappings_in_core_dump", extra={
                 "core_path": core_path,
             })
-            raise ParseError(f"No memory mappings found in core dump")
+            raise ParseError("No memory mappings found in core dump")
 
         # Create process snapshot
         async with self.manager.get_session() as session:
@@ -583,7 +581,7 @@ class ProcessDatabase:
             statement = select(MemoryMapping).where(
                 MemoryMapping.process_id == process_id
             )
-            result = await session.exec(statement)
+            result = await session.exec(statement)  # type: ignore
             mappings = result.all()
 
             exact_matches = 0
@@ -601,7 +599,7 @@ class ProcessDatabase:
                     pb_statement = select(ProcessBinary).where(
                         ProcessBinary.mapping_id == mapping.id
                     )
-                    pb_result = await session.exec(pb_statement)
+                    pb_result = await session.exec(pb_statement)  # type: ignore
                     process_binary = pb_result.first()
 
                     if not process_binary:
@@ -630,7 +628,7 @@ class ProcessDatabase:
                     name_statement = select(Binary).where(
                         Binary.name == binary_name
                     )
-                    name_result = await rootfs_session.exec(name_statement)
+                    name_result = await rootfs_session.exec(name_statement)  # type: ignore
                     candidates = name_result.all()
 
                     if not candidates:

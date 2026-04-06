@@ -8,14 +8,14 @@ Includes comprehensive error handling and validation (Phase 2 hardening).
 
 import logging
 
-from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
-from blackadder.models import Binary, FunctionFingerprint
 from blackadder.exceptions import (
-    ValidationError,
     DatabaseQueryError,
+    ValidationError,
 )
+from blackadder.models import Binary, FunctionFingerprint
 
 logger = logging.getLogger("blackadder.matcher")
 
@@ -56,15 +56,15 @@ class BinaryMatcher:
             # Input validation (Phase 2 hardening)
             if not isinstance(target_fingerprints, dict):
                 logger.error(f"Invalid target_fingerprints type: {type(target_fingerprints)}")
-                raise ValidationError(f"target_fingerprints must be dict")
+                raise ValidationError("target_fingerprints must be dict")
 
             if not isinstance(available_binaries, list):
                 logger.error(f"Invalid available_binaries type: {type(available_binaries)}")
-                raise ValidationError(f"available_binaries must be list")
+                raise ValidationError("available_binaries must be list")
 
             if not isinstance(threshold, (int, float)):
                 logger.error(f"Invalid threshold type: {type(threshold)}")
-                raise ValidationError(f"threshold must be float")
+                raise ValidationError("threshold must be float")
 
             if not (0.0 <= threshold <= 1.0):
                 logger.warning(f"Threshold out of range: {threshold} (should be 0.0-1.0)")
@@ -72,7 +72,7 @@ class BinaryMatcher:
 
             if not session:
                 logger.error("AsyncSession is None")
-                raise ValidationError(f"session cannot be None")
+                raise ValidationError("session cannot be None")
 
             logger.debug(
                 f"Matching {len(target_fingerprints)} target fingerprints "
@@ -127,7 +127,7 @@ class BinaryMatcher:
         statement = select(FunctionFingerprint).where(
             FunctionFingerprint.binary_id == binary_id
         )
-        result = await session.exec(statement)
+        result = await session.exec(statement)  # type: ignore
         fingerprints = result.all()
 
         fp_dict = {fp.func_name: fp.content_hash for fp in fingerprints}

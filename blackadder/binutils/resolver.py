@@ -5,9 +5,7 @@ Provides high-level functions for resolving instruction pointer addresses
 to function names, using both database lookups and external tools (addr2line).
 """
 
-import asyncio
 import re
-from typing import Optional
 
 from blackadder.binutils.parser import BinToolsParser
 
@@ -45,7 +43,7 @@ async def resolve_symbol(binary_path: str, offset: int, config) -> str:
 
 async def _resolve_with_addr2line(
     binary_path: str, offset: int, config
-) -> Optional[str]:
+) -> str | None:
     """
     Use addr2line to resolve address to function name and line number.
 
@@ -96,7 +94,7 @@ async def _resolve_with_addr2line(
 
 async def _resolve_with_objdump(
     binary_path: str, offset: int, config
-) -> Optional[str]:
+) -> str | None:
     """
     Resolve address using objdump symbol table.
 
@@ -130,7 +128,7 @@ async def _resolve_with_objdump(
             else:
                 break
 
-        if best_name:
+        if best_name and best_addr is not None:
             if best_addr == offset:
                 return best_name
             else:

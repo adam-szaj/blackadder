@@ -7,11 +7,10 @@ Defines models for both rootfs database (binary metadata) and process database
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+
 
 from pydantic import BaseModel, field_validator
-from sqlmodel import SQLModel, Field, Relationship
-
+from sqlmodel import Field, Relationship, SQLModel
 
 # ============================================================================
 # Pydantic models for validation and API
@@ -31,8 +30,8 @@ class ResolvedFrame(BaseModel):
     address: int
     frame_num: int
     symbol: str
-    file: Optional[str] = None
-    line: Optional[int] = None
+    file: str | None = None
+    line: int | None = None
 
     @field_validator("symbol")
     @classmethod
@@ -53,10 +52,10 @@ class Binary(SQLModel, table=True):
     Multiple file paths can reference the same binary via BinaryLocator.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     md5sum: str = Field(unique=True, index=True, max_length=32)
     name: str = Field(index=True)  # e.g., "libc.so.6"
-    debug_link: Optional[str] = None  # Path to separate debug symbols
+    debug_link: str | None = None  # Path to separate debug symbols
 
     # Relationships
     sections: list["SectionHeader"] = Relationship(back_populates="binary")
@@ -71,7 +70,7 @@ class SectionHeader(SQLModel, table=True):
     Includes .text, .bss, .rodata, .debug_info, etc.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
     idx: int  # Section index
     name: str = Field(index=True, max_length=32)  # ".text", ".bss", etc.
@@ -92,7 +91,7 @@ class Symbol(SQLModel, table=True):
     Used for address-to-symbol resolution.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
     address: int = Field(index=True)
     scope: str = Field(max_length=1)  # "l" (local), "g" (global), "w" (weak)
@@ -112,7 +111,7 @@ class FunctionFingerprint(SQLModel, table=True):
     Enables binary matching when MD5 differs but code is similar.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
     func_name: str = Field(index=True, max_length=256)
     func_offset: int  # Offset in binary
@@ -131,7 +130,7 @@ class BinaryLocator(SQLModel, table=True):
     Allows deduplication: same binary at multiple paths only stored once.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     path: str = Field(unique=True, index=True)  # Full file path
     md5sum: str = Field(foreign_key="binary.md5sum")
     mtime: int  # Modification time (unix timestamp) for cache validation
@@ -149,19 +148,19 @@ class ProcessSnapshot(SQLModel, table=True):
     Multiple analyses (backtraces, address resolutions) reference this.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-    pid: Optional[int] = None  # None for offline/core dump analysis
+    id: int | None = Field(default=None, primary_key=True)
+    pid: int | None = None  # None for offline/core dump analysis
     created_at: datetime = Field(default_factory=datetime.now)
     description: str = ""  # e.g., "core dump from crash at 2026-04-06 14:30:00"
 
     # Phase 2.2: Core dump parsing support
     source_type: str = Field(default="maps")  # "maps", "core_dump", "gdb_live"
-    source_path: Optional[str] = None  # Path to core dump file if applicable
+    source_path: str | None = None  # Path to core dump file if applicable
 
     # Relationships
     mappings: list["MemoryMapping"] = Relationship(back_populates="process")
     process_binaries: list["ProcessBinary"] = Relationship(back_populates="process")
-    register_state: Optional["ProcessRegisterState"] = Relationship(back_populates="process")
+    register_state: "ProcessRegisterState" | None = Relationship(back_populates="process")
 
 
 class MemoryMapping(SQLModel, table=True):
@@ -171,7 +170,7 @@ class MemoryMapping(SQLModel, table=True):
     Describes which binary is loaded at which address range.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
     start_addr: int = Field(index=True)
     end_addr: int = Field(index=True)
@@ -181,7 +180,7 @@ class MemoryMapping(SQLModel, table=True):
 
     # Relationships
     process: ProcessSnapshot = Relationship(back_populates="mappings")
-    analysis: Optional["MemoryRegionAnalysis"] = Relationship(back_populates="mapping")
+    analysis: "MemoryRegionAnalysis" | None = Relationship(back_populates="mapping")
 
 
 class ProcessBinary(SQLModel, table=True):
@@ -191,17 +190,17 @@ class ProcessBinary(SQLModel, table=True):
     Tracks which binary is loaded where in which process.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
-    binary_id: Optional[int] = Field(
+    binary_id: int | None = Field(
         default=None, foreign_key="binary.id"
     )  # None if binary not found
     mapping_id: int = Field(foreign_key="memorymapping.id")
     binary_load_addr: int  # Base address where binary is loaded
 
     # Phase 2: assembly matching fields
-    match_score: Optional[float] = None  # 0.0-1.0, 1.0 = exact match
-    match_method: Optional[str] = None  # "exact", "hash", "symbol", "partial"
+    match_score: float | None = None  # 0.0-1.0, 1.0 = exact match
+    match_method: str | None = None  # "exact", "hash", "symbol", "partial"
 
     # Relationships
     process: ProcessSnapshot = Relationship(back_populates="process_binaries")
@@ -214,13 +213,13 @@ class BacktraceEntry(SQLModel, table=True):
     Stores both raw address and resolved symbol information.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
     frame_num: int
     address: int = Field(index=True)
     resolved_symbol: str = Field(max_length=512)  # "function_name+0x123"
-    resolved_file: Optional[str] = Field(default=None, max_length=512)  # "src/file.c"
-    resolved_line: Optional[int] = None
+    resolved_file: str | None = Field(default=None, max_length=512)  # "src/file.c"
+    resolved_line: int | None = None
     match_confidence: float = Field(default=1.0)  # 0.0-1.0 for fuzzy matches
 
 
@@ -252,32 +251,32 @@ class ProcessRegisterState(SQLModel, table=True):
     Stores x86-64 general purpose and special registers from core dump.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
 
     # General purpose registers (x86-64)
-    rax: Optional[int] = None
-    rbx: Optional[int] = None
-    rcx: Optional[int] = None
-    rdx: Optional[int] = None
-    rsi: Optional[int] = None
-    rdi: Optional[int] = None
-    rbp: Optional[int] = None  # Frame pointer
-    rsp: Optional[int] = None  # Stack pointer
-    rip: Optional[int] = None  # Instruction pointer (crash location)
+    rax: int | None = None
+    rbx: int | None = None
+    rcx: int | None = None
+    rdx: int | None = None
+    rsi: int | None = None
+    rdi: int | None = None
+    rbp: int | None = None  # Frame pointer
+    rsp: int | None = None  # Stack pointer
+    rip: int | None = None  # Instruction pointer (crash location)
 
     # Extended registers
-    r8: Optional[int] = None
-    r9: Optional[int] = None
-    r10: Optional[int] = None
-    r11: Optional[int] = None
-    r12: Optional[int] = None
-    r13: Optional[int] = None
-    r14: Optional[int] = None
-    r15: Optional[int] = None
+    r8: int | None = None
+    r9: int | None = None
+    r10: int | None = None
+    r11: int | None = None
+    r12: int | None = None
+    r13: int | None = None
+    r14: int | None = None
+    r15: int | None = None
 
     # Flags
-    eflags: Optional[int] = None
+    eflags: int | None = None
 
     # Relationships
     process: ProcessSnapshot = Relationship(back_populates="register_state")
@@ -290,7 +289,7 @@ class MemoryRegionAnalysis(SQLModel, table=True):
     Stores classification, anomalies, and corruption risk for each mapping.
     """
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     mapping_id: int = Field(foreign_key="memorymapping.id", index=True)
 
     # Classification
