@@ -8,6 +8,8 @@ Includes comprehensive error handling and validation (Phase 2 hardening).
 import logging
 import re
 
+from blackadder.arch.base import Architecture
+from blackadder.arch.detector import get_architecture
 from blackadder.exceptions import (
     MemoryAnalysisError,
     ValidationError,
@@ -20,29 +22,33 @@ logger = logging.getLogger("blackadder.analyzer")
 class MemoryAnalyzer:
     """Analyze and classify memory regions."""
 
-    def __init__(self, config):
+    def __init__(self, config, architecture: Architecture | None = None):
         self.config = config
+        # Default to x86-64 if not specified; can be overridden per analysis
+        self.architecture = architecture or get_architecture("x86_64")
 
-    @staticmethod
     def classify_region(
+        self,
         pathname: str,
         start_addr: int,
         end_addr: int,
         perms: str,
         offset: int,
         register_state: dict | None = None,
+        architecture: Architecture | None = None,
     ) -> tuple[MemoryRegionType, float]:
         """
         Classify memory region type and confidence.
 
         Validates inputs and handles edge cases gracefully.
+        Uses architecture-specific heuristics for stack detection.
 
         Raises:
             ValidationError: If inputs are invalid
 
         Heuristics:
         - pathname contains "heap" → HEAP
-        - near RSP/RBP (register_state provided) → STACK
+        - near stack pointer/frame pointer (register_state provided) → STACK
         - pathname contains "vdso" → VDSO
         - pathname contains "vsyscall" → VSYSCALL
         - pathname contains ".so" → MMAP library
@@ -55,8 +61,10 @@ class MemoryAnalyzer:
             start_addr: Start address
             end_addr: End address
             perms: Permission string (r/w/x)
-            offset: File offset
+            offset: File offset (used for classification hints)
             register_state: Optional CPU register state (for stack detection)
+            architecture: Architecture instance for register-aware detection;
+                         uses self.architecture if not provided
 
         Returns:
             (MemoryRegionType, confidence: 0.0-1.0)
@@ -96,15 +104,14 @@ class MemoryAnalyzer:
 
         size = end_addr - start_addr
 
-        # Check for stack (near RSP/RBP)
-        if register_state:
-            rsp = register_state.get("rsp")
-            rbp = register_state.get("rbp")
-
-            if rsp and rbp:
-                # Stack typically contains RSP and is below it
-                if start_addr <= rsp < end_addr or start_addr <= rbp < end_addr:
-                    return (MemoryRegionType.STACK, 0.95)
+        # Check for stack using architecture-specific detection
+        arch = architecture or self.architecture
+        if register_state and arch:
+            is_stack, confidence = arch.classify_stack_region(
+                register_state, start_addr, end_addr
+            )
+            if is_stack:
+                return (MemoryRegionType.STACK, confidence)
 
         # Explicit markers in pathname
         if "[heap]" in pathname:
@@ -254,14 +261,15 @@ class MemoryAnalyzer:
 
         return False
 
-    @staticmethod
     def analyze_memory_region(
+        self,
         pathname: str,
         start_addr: int,
         end_addr: int,
         perms: str,
         offset: int,
         register_state: dict | None = None,
+        architecture: Architecture | None = None,
     ) -> dict:
         """
         Perform full analysis on a memory region.
@@ -273,6 +281,8 @@ class MemoryAnalyzer:
             perms: Permissions string
             offset: File offset
             register_state: Optional register state
+            architecture: Architecture for register-aware analysis;
+                         uses self.architecture if not provided
 
         Returns:
             {
@@ -317,7 +327,7 @@ class MemoryAnalyzer:
             },
         )
 
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = self.classify_region(
             pathname, start_addr, end_addr, perms, offset, register_state
         )
 

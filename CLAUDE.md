@@ -35,18 +35,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - `process.py`: ProcessDatabase for backtrace decoding, /proc/maps loading, address resolution
    - `rootfs.py`: RootfsDatabase for binary metadata and fingerprint caching (Phase 2.1)
 
-3. **Binutils Integration** (`blackadder/binutils/`)
+3. **Architecture Abstraction Layer** (`blackadder/arch/`)
+   - `base.py`: Abstract Architecture class with register definitions and normalization
+   - `x86.py`: X86Architecture (32-bit) and X86_64Architecture (64-bit) implementations
+   - `arm.py`: ARMArchitecture (32-bit) and ARM64Architecture (64-bit) implementations
+   - `detector.py`: ELF-based architecture detection and factory functions
+   - Supports: x86, x86-64, ARM, ARM64; extensible for RISC-V, PowerPC, MIPS, etc.
+   - Used by: FunctionHasher (instruction normalization), MemoryAnalyzer (stack detection)
+
+4. **Binutils Integration** (`blackadder/binutils/`)
    - `parser.py`: BinToolsParser wraps objdump/readelf with async subprocess limiting
    - `resolver.py`: Symbol resolution (addr2line + objdump fallback), backtrace format auto-detection
    - `hasher.py`: FunctionHasher extracts and normalizes assembly for fingerprinting (Phase 2.1)
    - `matcher.py`: BinaryMatcher scores fingerprint similarity (Phase 2.1)
 
-4. **CLI** (`blackadder/cli/main.py` - 305 lines)
+5. **CLI** (`blackadder/cli/main.py` - 305 lines)
    - Typer async commands: load-process, decode-backtrace, syms, version
    - Rich table output and progress bars
    - Configurable concurrency and caching
 
-5. **Configuration** (`blackadder/config.py`)
+6. **Configuration** (`blackadder/config.py`)
    - Pydantic Settings: env vars, .env file, auto-detected CPU count
    - Configurable: rootfs/process DB paths, tool paths, semaphore workers, cache sizes
 
@@ -68,6 +76,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `tests/test_hasher.py` (286 lines)
 - `tests/test_matcher.py` (273 lines)
 - `PHASE_2_1_STATUS.md` (comprehensive implementation details)
+
+### Architecture Abstraction Layer (Refactoring)
+
+**Goal**: Extract architecture-specific code (x86/ARM) into modular, extensible layer.
+
+**Motivation**: Previously, register definitions, instruction normalization, and stack detection were hardcoded for x86-64 throughout the codebase. This refactoring isolates architecture-specific logic for reusability and future extensibility (RISC-V, PowerPC, MIPS).
+
+**Design**:
+- `Architecture` abstract base class defines interface: registers, normalize_instruction(), classify_stack_region()
+- Concrete implementations: X86Architecture, X86_64Architecture, ARMArchitecture, ARM64Architecture
+- Factory functions: detect_architecture(binary_path) auto-detects from ELF e_machine
+- get_architecture(variant) returns instance by name ("x86_64", "arm64", etc.)
+
+**Integration Points**:
+- **FunctionHasher**: Uses architecture-specific register patterns for assembly normalization during fingerprinting
+- **MemoryAnalyzer**: Uses architecture-specific registers (RSP/RBP for x86-64, SP/X29 for ARM64) for stack detection
+
+**Usage**:
+```python
+# Auto-detect from binary
+arch = detect_architecture("/bin/bash")  # Returns X86_64Architecture instance
+
+# Explicit instantiation
+from blackadder.arch import get_architecture
+arm64 = get_architecture("arm64")
+
+# Pass to modules
+analyzer = MemoryAnalyzer(config, architecture=arm64)
+hasher = FunctionHasher(config, architecture=arch)
+```
+
+**Supported Architectures**:
+- x86 (32-bit, EM_386)
+- x86-64 (64-bit, EM_X86_64)
+- ARM (32-bit, EM_ARM)
+- ARM64 (64-bit, EM_AARCH64)
+- RISC-V (RV32I 32-bit, RV64I 64-bit, EM_RISCV)
+
+**Extensible**: New architectures (PowerPC, MIPS, etc.) can be added by subclassing Architecture and registering in ARCHITECTURE_MAP.
+
+See `ARCHITECTURE_EXTRACTION.md` for comprehensive documentation.
 
 ## Key Design Patterns
 

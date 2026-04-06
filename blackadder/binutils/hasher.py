@@ -12,6 +12,8 @@ import logging
 import re
 from pathlib import Path
 
+from blackadder.arch.base import Architecture
+from blackadder.arch.detector import detect_architecture
 from blackadder.binutils.parser import BinToolsParser
 from blackadder.exceptions import (
     FileFormatError,
@@ -24,9 +26,10 @@ logger = logging.getLogger("blackadder.hasher")
 class FunctionHasher:
     """Extract and hash function boundaries for binary matching."""
 
-    def __init__(self, config):
+    def __init__(self, config, architecture: Architecture | None = None):
         self.config = config
         self.parser = BinToolsParser(config)
+        self.architecture = architecture  # Optional; can be auto-detected per binary
 
     async def compute_fingerprints(self, binary_path: str) -> FingerprintResult:
         """
@@ -118,6 +121,28 @@ class FunctionHasher:
             },
         )
 
+        # Auto-detect architecture if not provided
+        binary_arch = self.architecture
+        if not binary_arch:
+            try:
+                binary_arch = detect_architecture(binary_path)
+                logger.debug(
+                    "architecture_detected_for_fingerprinting",
+                    extra={
+                        "binary_path": binary_path,
+                        "architecture": binary_arch.arch_variant,
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    "architecture_detection_failed",
+                    extra={
+                        "binary_path": binary_path,
+                        "error": str(e),
+                    },
+                )
+                binary_arch = None
+
         # Step 1: Get function boundaries from symbol table
         function_info = await self._extract_function_info(binary_path)
 
@@ -166,8 +191,8 @@ class FunctionHasher:
                 func_asm = self._extract_function_asm(disassembly, start_addr, end_addr, func_name)
 
                 if func_asm:
-                    # Normalize and hash
-                    normalized = self.normalize_function_body(func_asm)
+                    # Normalize and hash (using detected or provided architecture)
+                    normalized = self.normalize_function_body(func_asm, binary_arch)
                     content_hash = hashlib.sha256(normalized).hexdigest()
                     fingerprints[func_name] = content_hash
             except Exception as e:
@@ -328,8 +353,9 @@ class FunctionHasher:
         )
         return func_lines
 
-    @staticmethod
-    def normalize_function_body(asm_lines: list[str]) -> bytes:
+    def normalize_function_body(
+        self, asm_lines: list[str], architecture: Architecture | None = None
+    ) -> bytes:
         """
         Normalize disassembly for hashing.
 
@@ -339,11 +365,52 @@ class FunctionHasher:
         - Immediate values that may differ across versions
 
         Keep: instruction opcodes and operand structure
+
+        Args:
+            asm_lines: Assembly instruction lines
+            architecture: Architecture instance; uses self.architecture if not provided
+
+        Returns:
+            Normalized, hashed bytes
         """
         if not asm_lines:
             logger.debug("empty_assembly_lines")
             return b""
 
+        arch = architecture or self.architecture
+        if not arch:
+            logger.warning("no_architecture_for_normalization")
+            # Fall back to basic normalization without architecture-specific patterns
+            return self._normalize_generic(asm_lines)
+
+        normalized_lines = []
+
+        for line in asm_lines:
+            # Use architecture-specific normalization
+            normalized = arch.normalize_instruction(line)
+            if normalized:
+                normalized_lines.append(normalized)
+
+        # Join and encode for hashing
+        normalized_text = "\n".join(normalized_lines)
+        result = normalized_text.encode("utf-8")
+        logger.debug(
+            "assembly_normalized",
+            extra={
+                "input_lines": len(asm_lines),
+                "output_bytes": len(result),
+                "architecture": arch.arch_variant if arch else "unknown",
+            },
+        )
+        return result
+
+    @staticmethod
+    def _normalize_generic(asm_lines: list[str]) -> bytes:
+        """
+        Generic assembly normalization without architecture-specific knowledge.
+
+        Used as fallback when architecture cannot be determined.
+        """
         normalized_lines = []
 
         for line in asm_lines:
@@ -355,41 +422,16 @@ class FunctionHasher:
             if not line:
                 continue
 
-            # Normalize absolute addresses (0x... pattern at end of line)
-            # These can differ across versions due to ASLR/PIE
+            # Normalize absolute addresses
             line = re.sub(r"0x[0-9a-f]+", "0xADDR", line)
 
-            # Normalize register names to generic patterns
-            # %rax, %eax, %al -> %REG_A
-            # %rbx, %ebx, %bl -> %REG_B, etc.
-            register_map = {
-                r"%r?[0-9]?[a-d][xl]": "%REG_A",
-                r"%r?[0-9]?[b][xl]": "%REG_B",
-                r"%r?[0-9]?[c][xl]": "%REG_C",
-                r"%r?[0-9]?[d][xl]": "%REG_D",
-                r"%r?[sd]i": "%REG_IDX",
-                r"%r?bp": "%REG_BP",
-                r"%r?sp": "%REG_SP",
-            }
-
-            for pattern, replacement in register_map.items():
-                line = re.sub(pattern, replacement, line)
-
-            # Normalize immediate values (numbers that aren't part of instructions)
-            # Keep instruction structure but normalize numeric constants
+            # Normalize immediate values
             line = re.sub(r"\$0x[0-9a-f]+", "$IMM", line)
             line = re.sub(r"\$-?\d+", "$IMM", line)
+            line = re.sub(r"#0x[0-9a-f]+", "#IMM", line)
+            line = re.sub(r"#-?\d+", "#IMM", line)
 
             normalized_lines.append(line)
 
-        # Join and encode for hashing
         normalized_text = "\n".join(normalized_lines)
-        result = normalized_text.encode("utf-8")
-        logger.debug(
-            "assembly_normalized",
-            extra={
-                "input_lines": len(asm_lines),
-                "output_bytes": len(result),
-            },
-        )
-        return result
+        return normalized_text.encode("utf-8")
