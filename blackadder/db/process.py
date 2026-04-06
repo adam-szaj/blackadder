@@ -159,8 +159,8 @@ class ProcessDatabase:
         async with self.manager.get_session() as session:
             statement = select(ProcessSnapshot).where(ProcessSnapshot.id == process_id)
 
-            result = await session.exec(statement)  # type: ignore
-            process = result.first()
+            result = await session.execute(statement)  # type: ignore
+            process = result.scalars().first()
 
         return process
 
@@ -191,7 +191,7 @@ class ProcessDatabase:
                 & (MemoryMapping.start_addr <= addr)
                 & (MemoryMapping.end_addr > addr)
             )
-            result = await session.exec(statement)  # type: ignore
+            result = await session.execute(statement)  # type: ignore
             mapping = result.first()
 
             if mapping:
@@ -442,8 +442,8 @@ class ProcessDatabase:
 
         async with self.manager.get_session() as session:
             statement = select(MemoryMapping).where(MemoryMapping.process_id == process_id)
-            result = await session.exec(statement)  # type: ignore
-            mappings = result.all()
+            result = await session.execute(statement)  # type: ignore
+            mappings = result.scalars().all()
 
             analyzer = MemoryAnalyzer(self.config)
             all_anomalies = []
@@ -639,8 +639,8 @@ class ProcessDatabase:
         async with self.manager.get_session() as session:
             # Load all memory mappings for this process
             statement = select(MemoryMapping).where(MemoryMapping.process_id == process_id)
-            result = await session.exec(statement)  # type: ignore
-            mappings = result.all()
+            result = await session.execute(statement)  # type: ignore
+            mappings = result.scalars().all()
 
             exact_matches = 0
             fuzzy_matches = 0
@@ -684,8 +684,8 @@ class ProcessDatabase:
                     # Find matching binaries by name in rootfs
                     binary_name = mapping.pathname.split("/")[-1]
                     name_statement = select(Binary).where(Binary.name == binary_name)
-                    name_result = await rootfs_session.exec(name_statement)  # type: ignore
-                    candidates = name_result.all()
+                    name_result = await rootfs_session.execute(name_statement)  # type: ignore
+                    candidates = name_result.scalars().all()
 
                     if not candidates:
                         # No candidates found

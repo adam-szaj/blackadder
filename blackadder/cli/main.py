@@ -104,6 +104,9 @@ async def load_process(
 
         await manager.close()
 
+    except typer.Exit:
+        # Re-raise Typer exits without wrapping
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -200,6 +203,9 @@ async def decode_backtrace(
 
         await manager.close()
 
+    except typer.Exit:
+        # Re-raise Typer exits without wrapping
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -241,12 +247,12 @@ async def syms(
         manager = AsyncDatabaseManager(db_path)
         db_proc = ProcessDatabase(manager, config)
 
-        console.print(f"[blue]Resolving address {address:#x}...[/blue]")
+        console.print(f"[blue]Resolving address {addr:#x}...[/blue]")
 
         binary_info = await db_proc.address_to_binary(pid, addr)
 
         if not binary_info:
-            console.print(f"[yellow]Address {address:#x} not found in process memory[/yellow]")
+            console.print(f"[yellow]Address {addr:#x} not found in process memory[/yellow]")
             await manager.close()
             raise typer.Exit(1)
 
@@ -270,6 +276,9 @@ async def syms(
 
         await manager.close()
 
+    except typer.Exit:
+        # Re-raise Typer exits without wrapping
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -345,6 +354,9 @@ async def load_core_dump(
 
         await manager.close()
 
+    except typer.Exit:
+        # Re-raise Typer exits without wrapping
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -395,6 +407,9 @@ async def analyze_memory(
 
         await manager.close()
 
+    except typer.Exit:
+        # Re-raise Typer exits without wrapping
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
@@ -411,7 +426,24 @@ def version() -> None:
 
 def main():
     """Entry point for baldrick CLI."""
-    app()
+    import sys
+    import asyncio
+    import click
+    import os
+
+    # Get the result and handle async if needed
+    result = app(standalone_mode=False)
+    if asyncio.iscoroutine(result):
+        try:
+            asyncio.run(result)
+        except (click.exceptions.Exit, SystemExit) as e:
+            # Exit without printing traceback using os._exit()
+            # This bypasses Python's normal exception handler
+            exit_code = getattr(e, 'code', 1) or 1
+            os._exit(int(exit_code) if exit_code else 1)
+        except Exception:
+            # For other exceptions, exit (they will be caught by sys.excepthook)
+            os._exit(1)
 
 
 if __name__ == "__main__":

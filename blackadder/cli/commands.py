@@ -4,12 +4,11 @@ Provides commands for register interpretation, memory analysis,
 and other advanced debugging features.
 """
 
-import asyncio
 import logging
 import typer
 from pathlib import Path
+import json
 
-from blackadder.cli.formatters import OutputFormatter
 from blackadder.db.base import AsyncDatabaseManager
 from blackadder.config import BlackadderConfig
 from blackadder.analysis_integration import AnalysisIntegration
@@ -21,7 +20,7 @@ advanced_app = typer.Typer(help="Advanced analysis commands")
 
 
 @advanced_app.command(name="analyze-registers")
-def analyze_registers(
+async def analyze_registers(
     pid: int = typer.Option(..., help="Process ID to analyze"),
     process_db: str = typer.Option(
         "blackadder-process.db",
@@ -63,27 +62,23 @@ def analyze_registers(
         manager = AsyncDatabaseManager(db_url)
         integration = AnalysisIntegration(manager, config)
 
-        # Run async analysis
-        result = asyncio.run(
-            integration.analyze_registers(
-                process=None,  # Will be fetched by PID below
-                register_state=None,
-                interesting_only=interesting_only,
-            )
-        )
+        # Load process by PID
+        process = await integration.get_process_by_pid(pid)
+        if not process:
+            typer.echo(f"Error: Process {pid} not found in database", err=True)
+            raise typer.Exit(code=1)
 
-        formatter = OutputFormatter(json_output=json_output)
-
-        # For now, show placeholder since we need actual register data
-        typer.echo(
-            f"Register analysis for PID {pid} from {process_db}:",
-            err=False,
+        # Analyze registers
+        result = await integration.analyze_registers(
+            process=process,
+            register_state=None,
+            interesting_only=interesting_only,
         )
 
         if json_output:
-            import json
             typer.echo(json.dumps(result, indent=2, default=str))
         else:
+            typer.echo(f"Register analysis for PID {pid}")
             typer.echo(f"Architecture: {result.get('architecture', 'unknown')}")
             typer.echo(f"Register count: {result.get('register_count', 0)}")
 
@@ -97,7 +92,7 @@ def analyze_registers(
 
 
 @advanced_app.command(name="memory-report")
-def memory_report(
+async def memory_report(
     pid: int = typer.Option(..., help="Process ID to analyze"),
     process_db: str = typer.Option(
         "blackadder-process.db",
@@ -127,46 +122,35 @@ def memory_report(
         db_url = f"sqlite+aiosqlite:///{db_path}"
 
         manager = AsyncDatabaseManager(db_url)
+        integration = AnalysisIntegration(manager, config)
 
-        async def _memory_report():
-            async with manager.get_session() as session:
-                from sqlmodel import select
-                from blackadder.models import ProcessSnapshot
+        # Load process by PID
+        process = await integration.get_process_by_pid(pid)
+        if not process:
+            typer.echo(
+                f"Error: Process {pid} not found in database",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
-                statement = select(ProcessSnapshot).where(ProcessSnapshot.pid == pid)
-                result = await session.exec(statement)  # type: ignore
-                process = result.first()
-
-                if not process:
-                    typer.echo(
-                        f"Error: Process {pid} not found in database",
-                        err=True,
-                    )
-                    raise typer.Exit(code=1)
-
-                # Generate memory report
-                report = {
-                    "process_id": process.id,
-                    "pid": process.pid,
-                    "description": process.description,
-                    "mapping_count": len(process.mappings),
-                    "mappings": [
-                        {
-                            "start": hex(m.start_addr),
-                            "end": hex(m.end_addr),
-                            "perms": m.perms,
-                            "pathname": m.pathname,
-                        }
-                        for m in process.mappings
-                    ],
+        # Generate memory report
+        result = {
+            "process_id": process.id,
+            "pid": process.pid,
+            "description": process.description,
+            "mapping_count": len(process.mappings),
+            "mappings": [
+                {
+                    "start": hex(m.start_addr),
+                    "end": hex(m.end_addr),
+                    "perms": m.perms,
+                    "pathname": m.pathname,
                 }
-
-                return report
-
-        result = asyncio.run(_memory_report())
+                for m in process.mappings
+            ],
+        }
 
         if json_output:
-            import json
             typer.echo(json.dumps(result, indent=2, default=str))
         else:
             typer.echo(f"Memory Report for PID {pid}")
@@ -189,7 +173,7 @@ def memory_report(
 
 
 @advanced_app.command(name="stack-validate")
-def stack_validate(
+async def stack_validate(
     pid: int = typer.Option(..., help="Process ID to analyze"),
     process_db: str = typer.Option(
         "blackadder-process.db",
@@ -232,25 +216,23 @@ def stack_validate(
         manager = AsyncDatabaseManager(db_url)
         integration = AnalysisIntegration(manager, config)
 
-        async def _stack_validate():
-            process = await integration.get_process_by_pid(pid)
-            if not process:
-                typer.echo(
-                    f"Error: Process {pid} not found in database",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-
-            return await integration.validate_stack(
-                process,
-                frame_pointer=frame_pointer,
-                return_address=return_address,
+        # Load process by PID
+        process = await integration.get_process_by_pid(pid)
+        if not process:
+            typer.echo(
+                f"Error: Process {pid} not found in database",
+                err=True,
             )
+            raise typer.Exit(code=1)
 
-        result = asyncio.run(_stack_validate())
+        # Validate stack
+        result = await integration.validate_stack(
+            process,
+            frame_pointer=frame_pointer,
+            return_address=return_address,
+        )
 
         if json_output:
-            import json
             typer.echo(json.dumps(result, indent=2, default=str))
         else:
             typer.echo(f"Stack Validation for PID {pid}")
@@ -278,7 +260,7 @@ def stack_validate(
 
 
 @advanced_app.command(name="heap-analyze")
-def heap_analyze(
+async def heap_analyze(
     pid: int = typer.Option(..., help="Process ID to analyze"),
     process_db: str = typer.Option(
         "blackadder-process.db",
@@ -322,25 +304,23 @@ def heap_analyze(
         manager = AsyncDatabaseManager(db_url)
         integration = AnalysisIntegration(manager, config)
 
-        async def _heap_analyze():
-            process = await integration.get_process_by_pid(pid)
-            if not process:
-                typer.echo(
-                    f"Error: Process {pid} not found in database",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-
-            return await integration.analyze_heap(
-                process,
-                heap_start=heap_start,
-                heap_end=heap_end,
+        # Load process by PID
+        process = await integration.get_process_by_pid(pid)
+        if not process:
+            typer.echo(
+                f"Error: Process {pid} not found in database",
+                err=True,
             )
+            raise typer.Exit(code=1)
 
-        result = asyncio.run(_heap_analyze())
+        # Analyze heap
+        result = await integration.analyze_heap(
+            process,
+            heap_start=heap_start,
+            heap_end=heap_end,
+        )
 
         if json_output:
-            import json
             typer.echo(json.dumps(result, indent=2, default=str))
         else:
             typer.echo(f"Heap Analysis for PID {pid}")
