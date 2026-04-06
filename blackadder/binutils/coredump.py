@@ -21,6 +21,7 @@ from blackadder.exceptions import (
     ELFCoreDumpError,
     ParseError,
 )
+from blackadder.results import CoreDumpResult
 
 logger = logging.getLogger("blackadder.coredump")
 
@@ -32,7 +33,7 @@ class CoreDumpParser:
         self.config = config
         self.parser = BinToolsParser(config)
 
-    async def parse_core_dump(self, core_path: str) -> dict:
+    async def parse_core_dump(self, core_path: str) -> CoreDumpResult:
         """
         Parse ELF core dump and extract memory layout.
 
@@ -42,105 +43,143 @@ class CoreDumpParser:
            - PT_LOAD: memory segments (map to MemoryMapping)
            - PT_NOTE: metadata (process state, register values)
         3. Reconstruct /proc/maps-like format from segments
-        4. Return {mappings, process_info}
+        4. Return CoreDumpResult with status and mappings
 
         Args:
             core_path: Path to ELF core dump file
 
         Returns:
-            {
-                'mappings': [
-                    {'start_addr': 0x..., 'end_addr': 0x..., 'perms': 'r-xp',
-                     'offset': 0x..., 'pathname': '/path/to/binary'},
-                    ...
-                ],
-                'pid': PID from core dump (if available),
-                'signal': terminating signal (if available),
-                'timestamp': core dump creation time,
-            }
-
-        Raises:
-            FileNotFoundError: If core dump file not found
-            FileAccessError: If file not readable
-            FileTooLargeError: If file exceeds size limit
-            FileFormatError: If file not a valid ELF core dump
-            ParseError: If parsing fails
+            CoreDumpResult with status and reason if parsing fails
         """
-        try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(core_path, str):
-                logger.error(f"Invalid core_path type: {type(core_path)}")
-                raise FileFormatError(f"core_path must be string")
+        # Input validation
+        if not isinstance(core_path, str):
+            logger.error("invalid_core_path_type", extra={
+                "type": type(core_path).__name__,
+            })
+            raise FileFormatError(f"core_path must be string")
 
-            core_file = Path(core_path)
+        core_file = Path(core_path)
 
-            # Check file exists
-            if not core_file.exists():
-                logger.error(f"Core dump file not found: {core_path}")
-                raise FileNotFoundError(f"Core dump file not found: {core_path}")
-
-            # Check file readable
-            if not core_file.is_file():
-                logger.error(f"Core dump is not a file: {core_path}")
-                raise FileAccessError(f"Core dump is not a file: {core_path}")
-
-            # Check file size
-            file_size = core_file.stat().st_size
-            if file_size > self.config.max_core_dump_size:
-                logger.error(f"Core dump exceeds size limit: {file_size} > {self.config.max_core_dump_size}")
-                raise FileTooLargeError(
-                    f"Core dump exceeds limit: {file_size / (1024**2):.1f}MB "
-                    f"(max {self.config.max_core_dump_size / (1024**2):.1f}MB)"
-                )
-
-            logger.debug(f"Parsing core dump: {core_path} ({file_size / (1024**2):.1f}MB)")
-
-            # Step 1: Parse ELF headers
-            headers_output = await self._get_readelf_output(core_path, ["-h"])
-
-            if not headers_output:
-                logger.error(f"Failed to read ELF headers: {core_path}")
-                raise ParseError(f"Failed to parse ELF headers: {core_path}")
-
-            elf_headers = self.parse_elf_headers(headers_output)
-
-            if elf_headers.get("type") != "ET_CORE":
-                logger.error(f"File is not a core dump (type={elf_headers.get('type')}): {core_path}")
-                raise ELFCoreDumpError(f"File is not a core dump: {core_path}")
-
-            # Step 2: Parse program headers
-            prog_output = await self._get_readelf_output(core_path, ["-l"])
-
-            if not prog_output:
-                logger.error(f"Failed to read program headers: {core_path}")
-                raise ParseError(f"Failed to parse program headers: {core_path}")
-
-            program_headers = self.parse_program_headers(prog_output)
-
-            # Step 3: Extract memory segments
-            memory_mappings = self.extract_memory_segments(program_headers)
-
-            # Step 4: Extract metadata from PT_NOTE
-            metadata = self._extract_metadata_from_program_headers(program_headers)
-
-            logger.debug(
-                f"Core dump parsed: {len(memory_mappings)} segments, "
-                f"{len(program_headers)} program headers"
+        # Check file exists
+        if not core_file.exists():
+            logger.warning("core_dump_file_not_found", extra={
+                "core_path": core_path,
+            })
+            return CoreDumpResult(
+                mappings=[],
+                status="file_not_found",
+                reason="Core dump file does not exist",
+                core_path=core_path,
             )
 
-            return {
-                "mappings": memory_mappings,
-                "elf_headers": elf_headers,
-                "pid": metadata.get("pid"),
-                "signal": metadata.get("signal"),
-                "timestamp": metadata.get("timestamp"),
-            }
+        # Check file readable
+        if not core_file.is_file():
+            logger.warning("core_dump_not_a_file", extra={
+                "core_path": core_path,
+            })
+            return CoreDumpResult(
+                mappings=[],
+                status="permission_denied",
+                reason="Path is not a regular file",
+                core_path=core_path,
+            )
 
-        except (FileNotFoundError, FileAccessError, FileTooLargeError, ELFCoreDumpError, ParseError):
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error parsing core dump {core_path}: {e}")
-            raise ParseError(f"Core dump parsing failed: {e}")
+        # Check file size
+        file_size = core_file.stat().st_size
+        if file_size > self.config.max_core_dump_size:
+            logger.warning("core_dump_exceeds_size_limit", extra={
+                "core_path": core_path,
+                "file_size_mb": file_size / (1024**2),
+                "limit_mb": self.config.max_core_dump_size / (1024**2),
+            })
+            return CoreDumpResult(
+                mappings=[],
+                status="file_too_large",
+                reason=f"Core dump size {file_size / (1024**2):.1f}MB exceeds limit",
+                core_path=core_path,
+            )
+
+        logger.debug("core_dump_parsing_started", extra={
+            "core_path": core_path,
+            "file_size_mb": file_size / (1024**2),
+        })
+
+        # Step 1: Parse ELF headers
+        headers_output = await self._get_readelf_output(core_path, ["-h"])
+
+        if not headers_output:
+            logger.warning("failed_to_read_elf_headers", extra={
+                "core_path": core_path,
+            })
+            return CoreDumpResult(
+                mappings=[],
+                status="parse_error",
+                reason="Failed to read ELF headers",
+                core_path=core_path,
+            )
+
+        elf_headers = self.parse_elf_headers(headers_output)
+
+        if elf_headers.get("type") != "ET_CORE":
+            logger.warning("not_a_core_dump", extra={
+                "core_path": core_path,
+                "elf_type": elf_headers.get("type"),
+            })
+            return CoreDumpResult(
+                mappings=[],
+                status="not_core_dump",
+                reason=f"File type is {elf_headers.get('type')}, not ET_CORE",
+                core_path=core_path,
+            )
+
+        # Step 2: Parse program headers
+        prog_output = await self._get_readelf_output(core_path, ["-l"])
+
+        if not prog_output:
+            logger.warning("failed_to_read_program_headers", extra={
+                "core_path": core_path,
+            })
+            return CoreDumpResult(
+                mappings=[],
+                status="parse_error",
+                reason="Failed to read program headers",
+                core_path=core_path,
+            )
+
+        program_headers = self.parse_program_headers(prog_output)
+
+        # Step 3: Extract memory segments
+        memory_mappings = self.extract_memory_segments(program_headers)
+
+        if not memory_mappings:
+            logger.warning("no_load_segments_found", extra={
+                "core_path": core_path,
+            })
+            return CoreDumpResult(
+                mappings=[],
+                status="parse_error",
+                reason="No PT_LOAD segments found in core dump",
+                core_path=core_path,
+            )
+
+        # Step 4: Extract metadata from PT_NOTE
+        metadata = self._extract_metadata_from_program_headers(program_headers)
+
+        logger.info("core_dump_parsed", extra={
+            "core_path": core_path,
+            "segment_count": len(memory_mappings),
+            "program_header_count": len(program_headers),
+            "pid": metadata.get("pid"),
+        })
+
+        return CoreDumpResult(
+            mappings=memory_mappings,
+            elf_headers=elf_headers,
+            pid=metadata.get("pid"),
+            signal=metadata.get("signal"),
+            status="success",
+            core_path=core_path,
+        )
 
     async def _get_readelf_output(
         self, core_path: str, args: list[str]
@@ -170,239 +209,164 @@ class CoreDumpParser:
 
     @staticmethod
     def parse_elf_headers(readelf_output: str) -> dict:
-        """
-        Parse readelf -h output for ELF header info.
+        """Parse readelf -h output for ELF header info."""
+        result = {}
 
-        Extract:
-        - Class (32/64-bit)
-        - Endianness
-        - Type (ET_CORE, ET_EXEC, etc.)
+        # Pattern: "Class:                             ELF64"
+        class_match = re.search(r"Class:\s+(\S+)", readelf_output)
+        if class_match:
+            result["class"] = class_match.group(1)
 
-        Args:
-            readelf_output: Output from readelf -h
+        # Pattern: "Data:                              2's complement, little endian"
+        endian_match = re.search(r"Data:.*?(little|big)\s+endian", readelf_output)
+        if endian_match:
+            result["endian"] = endian_match.group(1)
 
-        Returns:
-            {class: 'ELF64', endian: 'little', type: 'ET_CORE', ...}
+        # Pattern: "Type:                              CORE (Core file)"
+        type_match = re.search(r"Type:\s+(\S+)", readelf_output)
+        if type_match:
+            result["type"] = type_match.group(1)
 
-        Raises:
-            ParseError: If output is invalid type
-        """
-        try:
-            result = {}
-
-            # Pattern: "Class:                             ELF64"
-            class_match = re.search(r"Class:\s+(\S+)", readelf_output)
-            if class_match:
-                result["class"] = class_match.group(1)
-
-            # Pattern: "Data:                              2's complement, little endian"
-            endian_match = re.search(r"Data:.*?(little|big)\s+endian", readelf_output)
-            if endian_match:
-                result["endian"] = endian_match.group(1)
-
-            # Pattern: "Type:                              CORE (Core file)"
-            type_match = re.search(r"Type:\s+(\S+)", readelf_output)
-            if type_match:
-                result["type"] = type_match.group(1)
-
-            logger.debug(f"Parsed ELF headers: {result}")
-            return result
-
-        except ParseError:
-            raise
-        except Exception as e:
-            logger.error(f"Error parsing ELF headers: {e}")
-            raise ParseError(f"ELF header parsing failed: {e}")
+        logger.debug("elf_headers_parsed", extra={"headers": result})
+        return result
 
     @staticmethod
     def parse_program_headers(readelf_output: str) -> list[dict]:
-        """
-        Parse readelf -l output for program headers.
+        """Parse readelf -l output for program headers."""
+        headers = []
 
-        Extract for each segment:
-        - Type (PT_LOAD, PT_NOTE, etc.)
-        - Offset in file
-        - Virtual address
-        - Physical size
-        - File size
-        - Permissions
+        # Pattern: "Type           Offset             VirtAddr           PhysAddr"
+        # "LOAD           0x0000000000001000 0x0000555555554000 0x0000000000000000"
+        # "         0x0000000000001000 0x0000000000001000  R                0x1000"
+        prog_header_pattern = re.compile(
+            r"(\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)"
+            r"\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+([\w\-]+)",
+            re.IGNORECASE
+        )
 
-        Args:
-            readelf_output: Output from readelf -l
+        failed_count = 0
+        for match in prog_header_pattern.finditer(readelf_output):
+            try:
+                header = {
+                    "type": match.group(1),
+                    "offset": int(match.group(2), 16),
+                    "vaddr": int(match.group(3), 16),
+                    "paddr": int(match.group(4), 16),
+                    "filesz": int(match.group(5), 16),
+                    "memsz": int(match.group(6), 16),
+                    "flags": match.group(7),
+                }
+                headers.append(header)
+            except (ValueError, IndexError):
+                logger.debug("malformed_program_header")
+                failed_count += 1
+                # Continue parsing other headers rather than failing
 
-        Returns:
-            List of program header dicts
-
-        Raises:
-            ParseError: If output is invalid type
-        """
-        try:
-            headers = []
-
-            # Pattern: "Type           Offset             VirtAddr           PhysAddr"
-            # "LOAD           0x0000000000001000 0x0000555555554000 0x0000000000000000"
-            # "         0x0000000000001000 0x0000000000001000  R                0x1000"
-            prog_header_pattern = re.compile(
-                r"(\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)"
-                r"\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+([\w\-]+)",
-                re.IGNORECASE
-            )
-
-            for match in prog_header_pattern.finditer(readelf_output):
-                try:
-                    header = {
-                        "type": match.group(1),
-                        "offset": int(match.group(2), 16),
-                        "vaddr": int(match.group(3), 16),
-                        "paddr": int(match.group(4), 16),
-                        "filesz": int(match.group(5), 16),
-                        "memsz": int(match.group(6), 16),
-                        "flags": match.group(7),
-                    }
-                    headers.append(header)
-                except (ValueError, IndexError) as e:
-                    logger.warning(f"Failed to parse program header: {e}")
-                    # Continue parsing other headers rather than failing
-
-            logger.debug(f"Parsed {len(headers)} program headers")
-            return headers
-
-        except ParseError:
-            raise
-        except Exception as e:
-            logger.error(f"Error parsing program headers: {e}")
-            raise ParseError(f"Program header parsing failed: {e}")
+        logger.debug("program_headers_parsed", extra={
+            "header_count": len(headers),
+            "failed_count": failed_count,
+        })
+        return headers
 
     @staticmethod
     def extract_memory_segments(program_headers: list[dict]) -> list[dict]:
-        """
-        Convert PT_LOAD segments to memory mappings.
+        """Convert PT_LOAD segments to memory mappings."""
+        mappings = []
+        skipped_count = 0
 
-        Return MemoryMapping format:
-        - start_addr = p_vaddr
-        - end_addr = p_vaddr + p_memsz
-        - perms = convert p_flags to rwx format
-        - offset = p_offset
-        - pathname = "[core dump segment]" or detected binary name
+        for idx, header in enumerate(program_headers):
+            # Only process LOAD segments
+            if header.get("type") != "LOAD":
+                continue
 
-        Args:
-            program_headers: List of program header dicts from parse_program_headers
+            # Validate header structure
+            required_keys = ["vaddr", "memsz", "offset"]
+            if not all(k in header for k in required_keys):
+                logger.debug("incomplete_segment_header", extra={"index": idx})
+                skipped_count += 1
+                continue
 
-        Returns:
-            List of memory mapping dicts suitable for MemoryMapping model
+            # Validate address values
+            vaddr = header["vaddr"]
+            memsz = header["memsz"]
+            if vaddr < 0 or memsz < 0:
+                logger.debug("negative_segment_values", extra={
+                    "index": idx,
+                    "vaddr": vaddr,
+                    "memsz": memsz,
+                })
+                skipped_count += 1
+                continue
 
-        Raises:
-            ParseError: If headers are invalid type
-        """
-        try:
-            mappings = []
+            if memsz > 0x40000000:  # 1GB
+                logger.warning("oversized_segment", extra={
+                    "index": idx,
+                    "size_gb": memsz / (1024**3),
+                })
+                # Continue anyway
 
-            for idx, header in enumerate(program_headers):
-                # Only process LOAD segments
-                if header.get("type") != "LOAD":
-                    continue
+            # Convert flags to permissions
+            flags = header.get("flags", "")
+            perms = ""
+            perms += "r" if "R" in flags else "-"
+            perms += "w" if "W" in flags else "-"
+            perms += "x" if "E" in flags else "-"
+            perms += "p"  # Private (from core dump)
 
-                # Validate header structure
-                required_keys = ["vaddr", "memsz", "offset"]
-                if not all(k in header for k in required_keys):
-                    logger.warning(f"Incomplete header at index {idx}: missing keys")
-                    continue
-
-                # Validate address values
-                vaddr = header["vaddr"]
-                memsz = header["memsz"]
-                if vaddr < 0 or memsz < 0:
-                    logger.warning(f"Negative values in header {idx}: vaddr={vaddr}, memsz={memsz}")
-                    continue
-
-                if memsz > 0x40000000:  # 1GB (from config max)
-                    logger.warning(f"Oversized segment {idx}: memsz={memsz / (1024**3):.1f}GB")
-                    # Continue anyway, but log warning
-
-                # Convert flags to permissions
-                flags = header.get("flags", "")
-                perms = ""
-                perms += "r" if "R" in flags else "-"
-                perms += "w" if "W" in flags else "-"
-                perms += "x" if "E" in flags else "-"
-                perms += "p"  # Private (from core dump)
-
-                # Create mapping
-                mapping = {
-                    "start_addr": vaddr,
-                    "end_addr": vaddr + memsz,
-                    "perms": perms,
-                    "offset": header.get("offset", 0),
-                    "pathname": "[core dump segment]",
-                }
-
-                mappings.append(mapping)
-
-            logger.debug(f"Extracted {len(mappings)} memory segments from {len(program_headers)} headers")
-            return mappings
-
-        except ParseError:
-            raise
-        except Exception as e:
-            logger.error(f"Error extracting memory segments: {e}")
-            raise ParseError(f"Memory segment extraction failed: {e}")
-
-    async def extract_register_state(self, core_path: str) -> dict:
-        """
-        Extract CPU register state from PT_NOTE sections (Phase 2.3).
-
-        Uses readelf to get note information, then parses NT_PRSTATUS.
-
-        Args:
-            core_path: Path to core dump
-
-        Returns:
-            {
-                'rax': 0x...,
-                'rbx': 0x...,
-                'rip': 0x...,  # Crash location
-                'rsp': 0x...,
-                ...
+            # Create mapping
+            mapping = {
+                "start_addr": vaddr,
+                "end_addr": vaddr + memsz,
+                "perms": perms,
+                "offset": header.get("offset", 0),
+                "pathname": "[core dump segment]",
             }
 
-        Raises:
-            FileFormatError: If core_path is invalid type
-            ParseError: If parsing fails
-        """
-        try:
-            logger.debug(f"Extracting register state from core dump: {core_path}")
+            mappings.append(mapping)
 
-            notes_output = await self._get_readelf_output(core_path, ["-n"])
+        logger.debug("memory_segments_extracted", extra={
+            "segment_count": len(mappings),
+            "total_headers": len(program_headers),
+            "skipped_count": skipped_count,
+        })
+        return mappings
 
-            if not notes_output:
-                logger.debug("No notes section in core dump")
-                return {}
+    async def extract_register_state(self, core_path: str) -> dict:
+        """Extract CPU register state from PT_NOTE sections (Phase 2.3)."""
+        logger.debug("extracting_register_state", extra={"core_path": core_path})
 
-            # Parse notes to find register information
-            # For MVP, extract what we can from readelf output
-            registers = {}
+        notes_output = await self._get_readelf_output(core_path, ["-n"])
 
-            # Look for register values in notes output
-            # Readelf -n output contains register values as hex
-            # Pattern: "R15:" or similar
-            register_pattern = re.compile(r"(?:RAX|RBX|RCX|RDX|RSI|RDI|RBP|RSP|RIP|R\d+):\s+([0-9a-f]+)")
+        if not notes_output:
+            logger.debug("no_notes_section")
+            return {}
 
-            for match in register_pattern.finditer(notes_output, re.IGNORECASE):
-                reg_name = match.group(0).split(":")[0].lower()
-                try:
-                    reg_value = int(match.group(1), 16)
-                    registers[reg_name] = reg_value
-                except ValueError:
-                    logger.warning(f"Failed to parse register value: {match.group(1)}")
+        # Parse notes to find register information
+        # For MVP, extract what we can from readelf output
+        registers = {}
 
-            logger.debug(f"Extracted {len(registers)} registers from core dump")
-            return registers
+        # Look for register values in notes output
+        # Readelf -n output contains register values as hex
+        # Pattern: "R15:" or similar
+        register_pattern = re.compile(r"(?:RAX|RBX|RCX|RDX|RSI|RDI|RBP|RSP|RIP|R\d+):\s+([0-9a-f]+)")
 
-        except FileFormatError:
-            raise
-        except Exception as e:
-            logger.error(f"Error extracting register state: {e}")
-            raise ParseError(f"Register state extraction failed: {e}")
+        failed_count = 0
+        for match in register_pattern.finditer(notes_output, re.IGNORECASE):
+            reg_name = match.group(0).split(":")[0].lower()
+            try:
+                reg_value = int(match.group(1), 16)
+                registers[reg_name] = reg_value
+            except ValueError:
+                logger.debug("malformed_register_value", extra={
+                    "value": match.group(1),
+                })
+                failed_count += 1
+
+        logger.debug("register_state_extracted", extra={
+            "register_count": len(registers),
+            "failed_count": failed_count,
+        })
+        return registers
 
     @staticmethod
     def _extract_metadata_from_program_headers(

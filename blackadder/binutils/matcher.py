@@ -121,38 +121,21 @@ class BinaryMatcher:
     async def _load_fingerprints(
         session: AsyncSession, binary_id: int
     ) -> dict[str, str]:
-        """
-        Load fingerprints for a binary from database.
+        """Load fingerprints for a binary from database."""
+        logger.debug("loading_fingerprints", extra={"binary_id": binary_id})
 
-        Args:
-            session: AsyncSession
-            binary_id: Binary ID
+        statement = select(FunctionFingerprint).where(
+            FunctionFingerprint.binary_id == binary_id
+        )
+        result = await session.exec(statement)
+        fingerprints = result.all()
 
-        Returns:
-            {func_name: content_hash} or {} if none found
-
-        Raises:
-            ValidationError: If binary_id is invalid
-            DatabaseQueryError: If query fails
-        """
-        try:
-            logger.debug(f"Loading fingerprints for binary {binary_id}")
-
-            statement = select(FunctionFingerprint).where(
-                FunctionFingerprint.binary_id == binary_id
-            )
-            result = await session.exec(statement)
-            fingerprints = result.all()
-
-            fp_dict = {fp.func_name: fp.content_hash for fp in fingerprints}
-            logger.debug(f"Loaded {len(fp_dict)} fingerprints for binary {binary_id}")
-            return fp_dict
-
-        except ValidationError:
-            raise
-        except Exception as e:
-            logger.error(f"Error loading fingerprints for binary {binary_id}: {e}")
-            raise DatabaseQueryError(f"Fingerprint load failed: {e}")
+        fp_dict = {fp.func_name: fp.content_hash for fp in fingerprints}
+        logger.debug("fingerprints_loaded", extra={
+            "binary_id": binary_id,
+            "fingerprint_count": len(fp_dict),
+        })
+        return fp_dict
 
     @staticmethod
     def score_match(
@@ -168,45 +151,31 @@ class BinaryMatcher:
         - Stripped binaries (function names may be missing)
         - Minor code changes (some functions differ, most match)
         - Function reordering (doesn't affect score)
-
-        Args:
-            target_fps: {func_name: content_hash} from process binary
-            candidate_fps: {func_name: content_hash} from database binary
-
-        Returns:
-            Score 0.0-1.0 where 1.0 = identical, 0.0 = no matches
-
-        Raises:
-            ValidationError: If inputs are invalid
         """
-        try:
-            if not target_fps or not candidate_fps:
-                logger.debug("Empty fingerprint set(s)")
-                return 0.0
+        if not target_fps or not candidate_fps:
+            logger.debug("empty_fingerprint_sets")
+            return 0.0
 
-            # Count matching functions (name + hash both match)
-            matching = 0
-            for func_name, target_hash in target_fps.items():
-                if func_name in candidate_fps:
-                    if candidate_fps[func_name] == target_hash:
-                        matching += 1
+        # Count matching functions (name + hash both match)
+        matching = 0
+        for func_name, target_hash in target_fps.items():
+            if func_name in candidate_fps:
+                if candidate_fps[func_name] == target_hash:
+                    matching += 1
 
-            # Score: matching / max(len(target), len(candidate))
-            # This handles cases where one set is a subset of the other
-            max_count = max(len(target_fps), len(candidate_fps))
+        # Score: matching / max(len(target), len(candidate))
+        # This handles cases where one set is a subset of the other
+        max_count = max(len(target_fps), len(candidate_fps))
 
-            if max_count == 0:
-                logger.debug("No fingerprints to score")
-                return 0.0
+        if max_count == 0:
+            return 0.0
 
-            score = matching / max_count
-            final_score = min(score, 1.0)  # Ensure 0.0-1.0 range
+        score = matching / max_count
+        final_score = min(score, 1.0)  # Ensure 0.0-1.0 range
 
-            logger.debug(f"Scored match: {matching}/{max_count} = {final_score:.3f}")
-            return final_score
-
-        except ValidationError:
-            raise
-        except Exception as e:
-            logger.error(f"Error scoring match: {e}")
-            raise ValidationError(f"Match scoring failed: {e}")
+        logger.debug("match_scored", extra={
+            "matching_count": matching,
+            "max_count": max_count,
+            "score": final_score,
+        })
+        return final_score

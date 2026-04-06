@@ -1,0 +1,69 @@
+"""
+Typed result objects for operations that can fail gracefully.
+
+These dataclasses provide structured returns for operations where:
+- Returning an empty/null result is valid (continue operation)
+- But callers need to know WHY the result is empty
+- Status and reason fields enable diagnostic visibility
+"""
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass
+class FingerprintResult:
+    """Result of computing function fingerprints from a binary."""
+    fingerprints: dict[str, str] = field(default_factory=dict)
+    status: str = "success"  # "success", "file_not_found", "not_elf", "no_functions", "parse_error", "permission_denied"
+    reason: Optional[str] = None
+    binary_path: Optional[str] = None
+
+
+@dataclass
+class CoreDumpResult:
+    """Result of parsing an ELF core dump."""
+    mappings: list[dict] = field(default_factory=list)
+    elf_headers: dict = field(default_factory=dict)
+    pid: Optional[int] = None
+    signal: Optional[int] = None
+    status: str = "success"  # "success", "file_not_found", "not_elf", "not_core_dump", "parse_error", "corrupted"
+    reason: Optional[str] = None
+    core_path: Optional[str] = None
+
+
+@dataclass
+class MapsParseResult:
+    """Result of parsing /proc/maps format."""
+    mappings: list[dict] = field(default_factory=list)
+    failed_lines: int = 0
+    parse_errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SymbolResolutionResult:
+    """Result of resolving an address to a symbol."""
+    symbol: str = "???"
+    status: str = "success"  # "success", "not_found", "binary_not_found", "error"
+    reason: Optional[str] = None
+    binary_path: Optional[str] = None
+    offset: Optional[int] = None
+
+
+@dataclass
+class BacktraceDecodeResult:
+    """Result of decoding a backtrace."""
+    frames: list = field(default_factory=list)
+    failed_count: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MemoryAnalysisResult:
+    """Result of analyzing memory layout."""
+    regions_analyzed: int = 0
+    anomalies: list[str] = field(default_factory=list)
+    corruption_count: int = 0
+    corruption_risk: float = 0.0
+    status: str = "success"  # "success", "invalid_process_id", "error"
+    reason: Optional[str] = None
