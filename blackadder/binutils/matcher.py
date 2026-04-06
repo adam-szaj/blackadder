@@ -136,15 +136,6 @@ class BinaryMatcher:
             DatabaseQueryError: If query fails
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(binary_id, int):
-                logger.warning(f"Invalid binary_id type: {type(binary_id)}")
-                raise ValidationError(f"binary_id must be int")
-
-            if binary_id <= 0:
-                logger.warning(f"Invalid binary_id: {binary_id} (must be positive)")
-                raise ValidationError(f"binary_id must be positive")
-
             logger.debug(f"Loading fingerprints for binary {binary_id}")
 
             statement = select(FunctionFingerprint).where(
@@ -189,26 +180,6 @@ class BinaryMatcher:
             ValidationError: If inputs are invalid
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(target_fps, dict):
-                logger.warning(f"Invalid target_fps type: {type(target_fps)}")
-                raise ValidationError(f"target_fps must be dict")
-
-            if not isinstance(candidate_fps, dict):
-                logger.warning(f"Invalid candidate_fps type: {type(candidate_fps)}")
-                raise ValidationError(f"candidate_fps must be dict")
-
-            # Validate dict contents
-            for name, hash_val in target_fps.items():
-                if not isinstance(name, str) or not isinstance(hash_val, str):
-                    logger.warning(f"Invalid target fingerprint entry: {name}={hash_val}")
-                    raise ValidationError(f"Fingerprints must map str→str")
-
-            for name, hash_val in candidate_fps.items():
-                if not isinstance(name, str) or not isinstance(hash_val, str):
-                    logger.warning(f"Invalid candidate fingerprint entry: {name}={hash_val}")
-                    raise ValidationError(f"Fingerprints must map str→str")
-
             if not target_fps or not candidate_fps:
                 logger.debug("Empty fingerprint set(s)")
                 return 0.0

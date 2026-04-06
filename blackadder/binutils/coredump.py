@@ -188,15 +188,6 @@ class CoreDumpParser:
             ParseError: If output is invalid type
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(readelf_output, str):
-                logger.warning(f"Invalid readelf output type: {type(readelf_output)}")
-                raise ParseError(f"readelf output must be string")
-
-            if not readelf_output.strip():
-                logger.warning("Empty readelf output")
-                raise ParseError(f"readelf output is empty")
-
             result = {}
 
             # Pattern: "Class:                             ELF64"
@@ -246,16 +237,6 @@ class CoreDumpParser:
             ParseError: If output is invalid type
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(readelf_output, str):
-                logger.warning(f"Invalid readelf output type: {type(readelf_output)}")
-                raise ParseError(f"readelf output must be string")
-
-            if not readelf_output.strip():
-                logger.warning("Empty readelf output for program headers")
-                # Return empty list instead of error - some files may have no PT_LOAD
-                return []
-
             headers = []
 
             # Pattern: "Type           Offset             VirtAddr           PhysAddr"
@@ -314,11 +295,6 @@ class CoreDumpParser:
             ParseError: If headers are invalid type
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(program_headers, list):
-                logger.warning(f"Invalid program_headers type: {type(program_headers)}")
-                raise ParseError(f"program_headers must be list")
-
             mappings = []
 
             for idx, header in enumerate(program_headers):
@@ -394,15 +370,6 @@ class CoreDumpParser:
             ParseError: If parsing fails
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(core_path, str):
-                logger.warning(f"Invalid core_path type: {type(core_path)}")
-                raise FileFormatError(f"core_path must be string")
-
-            if not core_path.strip():
-                logger.warning("Empty core_path")
-                return {}
-
             logger.debug(f"Extracting register state from core dump: {core_path}")
 
             notes_output = await self._get_readelf_output(core_path, ["-n"])

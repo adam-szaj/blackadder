@@ -194,7 +194,10 @@ All modules now use consistent logging:
 
 ## Validation Patterns
 
-### File Validation (coredump.py, hasher.py)
+**Rule**: Validate at entry point (external source) once. Remove redundant checks in internal helpers.
+
+### File Validation (coredump.py, hasher.py) - KEPT
+Applied in: `parse_core_dump()`, `compute_fingerprints()`
 ```python
 file_path = Path(path)
 if not file_path.exists():
@@ -205,38 +208,45 @@ if file_path.stat().st_size > self.config.max_core_dump_size:
     raise FileTooLargeError(f"File too large...")
 ```
 
-### Address Validation (process.py, memory_analyzer.py)
+### Address Range Validation (process.py) - KEPT AT BOUNDARY
+Applied in: `load_maps()`, `_parse_maps_lines()` (called after validation)
 ```python
-if start_addr < 0 or end_addr < 0:
-    raise ValidationError(f"Negative addresses")
+# In load_maps() - validate PID once
+if pid is not None and pid < 0:
+    raise ValidationError(f"pid must be non-negative")
+
+# In _parse_maps_lines() - validate parsed data (from file)
 if start_addr >= end_addr:
-    raise ValidationError(f"Invalid range: {start_addr} >= {end_addr}")
+    logger.warning(f"Invalid range...")
+    continue  # Skip malformed entry
 ```
 
-### Threshold Validation (matcher.py)
+### Threshold Validation (matcher.py) - KEPT
+Applied in: `find_matches()`
 ```python
 if not (0.0 <= threshold <= 1.0):
     raise ValidationError(f"threshold must be 0.0-1.0, got {threshold}")
 ```
 
-### Type Validation (all modules)
-```python
-if not isinstance(obj, dict):
-    logger.error(f"Invalid type: {type(obj)}")
-    raise ValidationError(f"obj must be dict")
-```
+### Type Validation - REMOVED FROM INTERNALS
+Removed from: `_parse_maps_lines()`, `_get_cached_symbol()`, `_extract_function_asm()`, `normalize_function_body()`, `_load_fingerprints()`, `score_match()`, `parse_elf_headers()`, `parse_program_headers()`, `extract_memory_segments()`, `detect_anomalies()`, `check_corruption_markers()`, `format_register_display()`
+
+These methods are called internally after validation, so type hints + static checker are sufficient.
 
 ---
 
 ## Code Statistics
 
-### Lines Added
-- memory_analyzer.py: ~250 lines (validation + logging)
-- coredump.py: ~150 lines (validation + error handling)
-- hasher.py: ~200 lines (validation + error handling)
-- matcher.py: ~150 lines (validation + error handling)
-- process.py: ~300 lines (validation + error handling)
-- **Total**: ~1050 lines of hardening code
+### Lines Added (After Cleanup)
+- memory_analyzer.py: ~180 lines (boundary validation + logging)
+- coredump.py: ~100 lines (boundary validation + error handling)
+- hasher.py: ~140 lines (boundary validation + error handling)
+- matcher.py: ~100 lines (boundary validation + error handling)
+- process.py: ~240 lines (boundary validation + error handling)
+- **Total**: ~760 lines of hardening code
+- **Removed**: ~290 lines of redundant internal type checks
+
+**Change**: Removed all isinstance() checks from internal helpers and functions called after validation. Kept validation only at external boundaries (user input, file reads, binary output).
 
 ### Test Coverage Required
 - 40+ unit tests for error paths

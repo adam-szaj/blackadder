@@ -142,7 +142,6 @@ class FunctionHasher:
             ParseError: If parsing fails
         """
         try:
-            function_info = {}
             lines = []
 
             def collect_line(line):
@@ -210,8 +209,6 @@ class FunctionHasher:
             def collect_line(line):
                 lines.append(line)
 
-            logger.debug(f"Generating disassembly for: {binary_path}")
-
             await self.parser.run_command_limited(
                 [self.config.objdump_path, "-d", binary_path], collect_line
             )
@@ -241,23 +238,6 @@ class FunctionHasher:
             ParseError: If inputs are invalid
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(disassembly, str):
-                logger.warning(f"Invalid disassembly type: {type(disassembly)}")
-                raise ParseError(f"disassembly must be string")
-
-            if not isinstance(func_name, str):
-                logger.warning(f"Invalid func_name type: {type(func_name)}")
-                raise ParseError(f"func_name must be string")
-
-            if start_addr < 0 or end_addr < 0:
-                logger.warning(f"Invalid addresses: start={start_addr}, end={end_addr}")
-                raise ParseError(f"Addresses must be non-negative")
-
-            if start_addr >= end_addr:
-                logger.debug(f"Empty address range for {func_name}: {start_addr}-{end_addr}")
-                return []
-
             func_lines = []
             in_function = False
 
@@ -316,21 +296,13 @@ class FunctionHasher:
             ParseError: If inputs are invalid
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(asm_lines, list):
-                logger.warning(f"Invalid asm_lines type: {type(asm_lines)}")
-                raise ParseError(f"asm_lines must be list")
-
             if not asm_lines:
                 logger.debug("Empty assembly lines for normalization")
                 return b""
 
             normalized_lines = []
 
-            for idx, line in enumerate(asm_lines):
-                if not isinstance(line, str):
-                    logger.warning(f"Non-string line at index {idx}: {type(line)}")
-                    continue
+            for line in asm_lines:
 
                 # Remove comments
                 if "#" in line:

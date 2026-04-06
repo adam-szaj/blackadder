@@ -171,23 +171,6 @@ class ProcessDatabase:
             DatabaseQueryError: If query fails
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(pid, int):
-                logger.warning(f"Invalid pid type: {type(pid)}")
-                raise ValidationError(f"pid must be int")
-
-            if pid <= 0:
-                logger.warning(f"Invalid pid: {pid} (must be positive)")
-                raise ValidationError(f"pid must be positive")
-
-            if not isinstance(addr, int):
-                logger.warning(f"Invalid addr type: {type(addr)}")
-                raise ValidationError(f"addr must be int")
-
-            if addr < 0:
-                logger.warning(f"Negative address: {addr}")
-                raise ValidationError(f"addr must be non-negative")
-
             logger.debug(f"Resolving address {addr:#x} in process {pid}")
 
             async with self.manager.get_session() as session:
@@ -362,19 +345,6 @@ class ProcessDatabase:
             ValidationError: If inputs are invalid
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(binary_path, str):
-                logger.warning(f"Invalid binary_path type: {type(binary_path)}")
-                return "???"
-
-            if not isinstance(offset, int):
-                logger.warning(f"Invalid offset type: {type(offset)}")
-                return "???"
-
-            if offset < 0:
-                logger.warning(f"Negative offset: {offset}")
-                return "???"
-
             cache_key = (binary_path, offset)
 
             # Check cache first (fast path)
@@ -670,15 +640,6 @@ class ProcessDatabase:
             ParseError: If lines is invalid type
         """
         try:
-            # Input validation (Phase 2 hardening)
-            if not isinstance(lines, list):
-                logger.warning(f"Invalid lines type: {type(lines)}")
-                raise ParseError(f"lines must be list")
-
-            if not lines:
-                logger.debug("Empty lines list for parsing")
-                return []
-
             # Regex pattern for /proc/maps format
             maps_pattern = re.compile(
                 r"^([0-9a-f]+)-([0-9a-f]+)\s+"
@@ -693,11 +654,6 @@ class ProcessDatabase:
             failed_lines = 0
 
             for idx, line in enumerate(lines):
-                if not isinstance(line, str):
-                    logger.warning(f"Non-string line at index {idx}: {type(line)}")
-                    failed_lines += 1
-                    continue
-
                 line = line.strip()
                 if not line:
                     continue
@@ -711,7 +667,7 @@ class ProcessDatabase:
                         offset = int(m.group(4), 16)
                         pathname = m.group(6).strip() or "[anonymous]"
 
-                        # Validate parsed values
+                        # Validate parsed values (from file)
                         if start_addr >= end_addr:
                             logger.warning(f"Invalid address range at line {idx}: {start_addr} >= {end_addr}")
                             failed_lines += 1
@@ -737,8 +693,6 @@ class ProcessDatabase:
             logger.debug(f"Parsed {len(parsed)} mappings from {len(lines)} lines ({failed_lines} failed)")
             return parsed
 
-        except ParseError:
-            raise
         except Exception as e:
             logger.error(f"Unexpected error parsing maps: {e}")
             raise ParseError(f"Maps parsing failed: {e}")

@@ -160,19 +160,7 @@ class MemoryAnalyzer:
         Raises:
             ValidationError: If inputs are invalid
         """
-        # Input validation
-        if not isinstance(perms, str) or len(perms) != 4:
-            logger.warning(f"Invalid permissions: {perms}")
-            raise ValidationError(f"Invalid permissions string: {perms}")
-
-        if size < 0:
-            logger.warning(f"Negative size: {size}")
-            raise ValidationError(f"Region size cannot be negative: {size}")
-
-        if not isinstance(pathname, str):
-            logger.warning(f"Invalid pathname type: {type(pathname)}")
-            raise ValidationError(f"Pathname must be string")
-
+        # Validate once at boundary (analyze_memory_region)
         anomalies = []
 
         # Executable heap (code injection marker)
@@ -224,15 +212,6 @@ class MemoryAnalyzer:
         Raises:
             ValidationError: If inputs are invalid
         """
-        # Input validation
-        if not isinstance(perms, str) or len(perms) != 4:
-            logger.warning(f"Invalid permissions: {perms}")
-            raise ValidationError(f"Invalid permissions string: {perms}")
-
-        if not isinstance(pathname, str):
-            logger.warning(f"Invalid pathname type: {type(pathname)}")
-            raise ValidationError(f"Pathname must be string")
-
         try:
             # Executable heap
             if region_type == MemoryRegionType.HEAP and "x" in perms:
@@ -362,11 +341,6 @@ class MemoryAnalyzer:
             if register_state is None:
                 logger.debug("No register state available")
                 return "No register state available from core dump"
-
-            # Validate input
-            if not isinstance(register_state, dict):
-                logger.warning(f"Invalid register state type: {type(register_state)}")
-                raise ValidationError(f"register_state must be dict or None")
 
             lines = []
 
