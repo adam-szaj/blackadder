@@ -4,8 +4,17 @@ Provides commands for register interpretation, memory analysis,
 and other advanced debugging features.
 """
 
+import asyncio
+import logging
 import typer
+from pathlib import Path
+
 from blackadder.cli.formatters import OutputFormatter
+from blackadder.db.base import AsyncDatabaseManager
+from blackadder.config import BlackadderConfig
+from blackadder.analysis_integration import AnalysisIntegration
+
+logger = logging.getLogger("blackadder.cli.commands")
 
 # Create sub-app for advanced commands
 advanced_app = typer.Typer(help="Advanced analysis commands")
@@ -44,29 +53,46 @@ def analyze_registers(
         baldrick analyze-registers --pid 12345 --interesting
     """
     try:
-        # For now, this is a stub that shows the architecture
-        # In a full implementation, it would:
-        # 1. Load process data from database
-        # 2. Create RegisterAnalyzer with process snapshot
-        # 3. Interpret registers from core dump or live session
+        # Load process from database and analyze registers
+        config = BlackadderConfig()
+
+        # Build database URL
+        db_path = Path(process_db).resolve()
+        db_url = f"sqlite+aiosqlite:///{db_path}"
+
+        manager = AsyncDatabaseManager(db_url)
+        integration = AnalysisIntegration(manager, config)
+
+        # Run async analysis
+        result = asyncio.run(
+            integration.analyze_registers(
+                process=None,  # Will be fetched by PID below
+                register_state=None,
+                interesting_only=interesting_only,
+            )
+        )
 
         formatter = OutputFormatter(json_output=json_output)
 
+        # For now, show placeholder since we need actual register data
         typer.echo(
-            "Register analysis requires process data from database or live session.",
-            err=True,
-        )
-        typer.echo(
-            f"PID {pid}: Would analyze registers from {process_db}", err=True
+            f"Register analysis for PID {pid} from {process_db}:",
+            err=False,
         )
 
-        if interesting_only:
-            typer.echo("--interesting flag: show only non-trivial registers", err=True)
+        if json_output:
+            import json
+            typer.echo(json.dumps(result, indent=2, default=str))
+        else:
+            typer.echo(f"Architecture: {result.get('architecture', 'unknown')}")
+            typer.echo(f"Register count: {result.get('register_count', 0)}")
 
+    except FileNotFoundError as e:
+        typer.echo(f"Error: Database file not found: {process_db}", err=True)
         raise typer.Exit(code=1)
-
     except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
+        logger.exception("analyze_registers_error", extra={"pid": pid, "error": str(e)})
+        typer.echo(f"Error analyzing registers: {e}", err=True)
         raise typer.Exit(code=1)
 
 
@@ -96,17 +122,69 @@ def memory_report(
         baldrick memory-report --pid 12345 --json
     """
     try:
-        formatter = OutputFormatter(json_output=json_output)
+        config = BlackadderConfig()
+        db_path = Path(process_db).resolve()
+        db_url = f"sqlite+aiosqlite:///{db_path}"
 
-        typer.echo(
-            "Memory report requires process data from database.", err=True
-        )
-        typer.echo(f"PID {pid}: Would generate report from {process_db}", err=True)
+        manager = AsyncDatabaseManager(db_url)
 
+        async def _memory_report():
+            async with manager.get_session() as session:
+                from sqlmodel import select
+                from blackadder.models import ProcessSnapshot
+
+                statement = select(ProcessSnapshot).where(ProcessSnapshot.pid == pid)
+                result = await session.exec(statement)  # type: ignore
+                process = result.first()
+
+                if not process:
+                    typer.echo(
+                        f"Error: Process {pid} not found in database",
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
+
+                # Generate memory report
+                report = {
+                    "process_id": process.id,
+                    "pid": process.pid,
+                    "description": process.description,
+                    "mapping_count": len(process.mappings),
+                    "mappings": [
+                        {
+                            "start": hex(m.start_addr),
+                            "end": hex(m.end_addr),
+                            "perms": m.perms,
+                            "pathname": m.pathname,
+                        }
+                        for m in process.mappings
+                    ],
+                }
+
+                return report
+
+        result = asyncio.run(_memory_report())
+
+        if json_output:
+            import json
+            typer.echo(json.dumps(result, indent=2, default=str))
+        else:
+            typer.echo(f"Memory Report for PID {pid}")
+            typer.echo(f"Process ID: {result['process_id']}")
+            typer.echo(f"Mappings: {result['mapping_count']}")
+            for m in result["mappings"][:10]:  # Show first 10
+                typer.echo(
+                    f"  {m['start']}-{m['end']} {m['perms']} {m['pathname']}"
+                )
+            if len(result["mappings"]) > 10:
+                typer.echo(f"  ... and {len(result['mappings']) - 10} more")
+
+    except FileNotFoundError as e:
+        typer.echo(f"Error: Database file not found: {process_db}", err=True)
         raise typer.Exit(code=1)
-
     except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
+        logger.exception("memory_report_error", extra={"pid": pid, "error": str(e)})
+        typer.echo(f"Error generating memory report: {e}", err=True)
         raise typer.Exit(code=1)
 
 
@@ -122,6 +200,16 @@ def stack_validate(
         "--json",
         help="Output as JSON instead of plain text",
     ),
+    frame_pointer: int = typer.Option(
+        None,
+        "--fp",
+        help="Starting frame pointer (RBP/X29) in hex",
+    ),
+    return_address: int = typer.Option(
+        None,
+        "--ra",
+        help="Starting return address in hex",
+    ),
 ) -> None:
     """Validate stack frame chain integrity.
 
@@ -134,20 +222,58 @@ def stack_validate(
     Example:
         baldrick stack-validate --pid 12345
         baldrick stack-validate --pid 12345 --json
+        baldrick stack-validate --pid 12345 --fp 0x7fffffffde00 --ra 0x400a1c
     """
     try:
-        formatter = OutputFormatter(json_output=json_output)
+        config = BlackadderConfig()
+        db_path = Path(process_db).resolve()
+        db_url = f"sqlite+aiosqlite:///{db_path}"
 
-        typer.echo(
-            "Stack validation requires process data from database.",
-            err=True,
-        )
-        typer.echo(f"PID {pid}: Would validate stack from {process_db}", err=True)
+        manager = AsyncDatabaseManager(db_url)
+        integration = AnalysisIntegration(manager, config)
 
+        async def _stack_validate():
+            process = await integration.get_process_by_pid(pid)
+            if not process:
+                typer.echo(
+                    f"Error: Process {pid} not found in database",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
+            return await integration.validate_stack(
+                process,
+                frame_pointer=frame_pointer,
+                return_address=return_address,
+            )
+
+        result = asyncio.run(_stack_validate())
+
+        if json_output:
+            import json
+            typer.echo(json.dumps(result, indent=2, default=str))
+        else:
+            typer.echo(f"Stack Validation for PID {pid}")
+            typer.echo(f"Architecture: {result['architecture']}")
+            typer.echo(
+                f"Frames: {result['total_frames']} total, "
+                f"{result['valid_frames']} valid, "
+                f"{result['corrupted_frames']} corrupted"
+            )
+            typer.echo(f"Chain integrity: {result['chain_integrity']:.1%}")
+            if result["issues"]:
+                typer.echo(f"Issues ({len(result['issues'])}):")
+                for issue in result["issues"][:5]:  # Show first 5
+                    typer.echo(
+                        f"  - {issue['issue_type']}: {issue['description']}"
+                    )
+
+    except FileNotFoundError:
+        typer.echo(f"Error: Database file not found: {process_db}", err=True)
         raise typer.Exit(code=1)
-
     except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
+        logger.exception("stack_validate_error", extra={"pid": pid, "error": str(e)})
+        typer.echo(f"Error validating stack: {e}", err=True)
         raise typer.Exit(code=1)
 
 
@@ -163,6 +289,16 @@ def heap_analyze(
         "--json",
         help="Output as JSON instead of plain text",
     ),
+    heap_start: int = typer.Option(
+        None,
+        "--heap-start",
+        help="Heap start address in hex (auto-detect if not specified)",
+    ),
+    heap_end: int = typer.Option(
+        None,
+        "--heap-end",
+        help="Heap end address in hex (auto-detect if not specified)",
+    ),
 ) -> None:
     """Analyze heap structure and detect corruption.
 
@@ -176,20 +312,63 @@ def heap_analyze(
     Example:
         baldrick heap-analyze --pid 12345
         baldrick heap-analyze --pid 12345 --json
+        baldrick heap-analyze --pid 12345 --heap-start 0x1000000 --heap-end 0x2000000
     """
     try:
-        formatter = OutputFormatter(json_output=json_output)
+        config = BlackadderConfig()
+        db_path = Path(process_db).resolve()
+        db_url = f"sqlite+aiosqlite:///{db_path}"
 
-        typer.echo(
-            "Heap analysis requires process data from database.",
-            err=True,
-        )
-        typer.echo(f"PID {pid}: Would analyze heap from {process_db}", err=True)
+        manager = AsyncDatabaseManager(db_url)
+        integration = AnalysisIntegration(manager, config)
 
+        async def _heap_analyze():
+            process = await integration.get_process_by_pid(pid)
+            if not process:
+                typer.echo(
+                    f"Error: Process {pid} not found in database",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+
+            return await integration.analyze_heap(
+                process,
+                heap_start=heap_start,
+                heap_end=heap_end,
+            )
+
+        result = asyncio.run(_heap_analyze())
+
+        if json_output:
+            import json
+            typer.echo(json.dumps(result, indent=2, default=str))
+        else:
+            typer.echo(f"Heap Analysis for PID {pid}")
+            if "error" in result:
+                typer.echo(f"Error: {result['error']}")
+            else:
+                typer.echo(f"Heap: {result['heap_start']}-{result['heap_end']}")
+                typer.echo(f"Size: {result['heap_size']} bytes")
+                typer.echo(f"Allocated: {result['allocated_size']} bytes")
+                typer.echo(f"Free: {result['free_size']} bytes")
+                typer.echo(f"Fragmentation: {result['fragmentation']:.1%}")
+                typer.echo(f"Anomalies: {len(result['anomalies'])}")
+                typer.echo(
+                    f"High-Risk Anomalies: {len(result['high_risk_anomalies'])}"
+                )
+                if result["anomalies"]:
+                    typer.echo("Top anomalies:")
+                    for anom in result["anomalies"][:3]:  # Show first 3
+                        typer.echo(
+                            f"  - {anom['anomaly_type']}: {anom['description']}"
+                        )
+
+    except FileNotFoundError:
+        typer.echo(f"Error: Database file not found: {process_db}", err=True)
         raise typer.Exit(code=1)
-
     except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
+        logger.exception("heap_analyze_error", extra={"pid": pid, "error": str(e)})
+        typer.echo(f"Error analyzing heap: {e}", err=True)
         raise typer.Exit(code=1)
 
 
