@@ -47,10 +47,7 @@ async def test_subprocess_semaphore_limits(parser_config):
         current_concurrent -= 1
 
     # With semaphore=2, max concurrent should be 2
-    tasks = [
-        parser.subprocess_sem.__aenter__()
-        for _ in range(5)
-    ]
+    tasks = [parser.subprocess_sem.__aenter__() for _ in range(5)]
 
     # This is a simplified test; real test would measure actual subprocess calls
     assert parser.subprocess_sem._value == 2
@@ -115,10 +112,7 @@ async def test_concurrent_command_execution(parser_config):
     parser = BinToolsParser(parser_config)
 
     # Create multiple concurrent echo commands
-    tasks = [
-        parser.run_command_limited(["echo", f"test{i}"])
-        for i in range(4)
-    ]
+    tasks = [parser.run_command_limited(["echo", f"test{i}"]) for i in range(4)]
 
     results = await asyncio.gather(*tasks)
 

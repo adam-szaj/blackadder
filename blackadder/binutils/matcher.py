@@ -118,23 +118,22 @@ class BinaryMatcher:
             raise DatabaseQueryError(f"Binary matching failed: {e}")
 
     @staticmethod
-    async def _load_fingerprints(
-        session: AsyncSession, binary_id: int
-    ) -> dict[str, str]:
+    async def _load_fingerprints(session: AsyncSession, binary_id: int) -> dict[str, str]:
         """Load fingerprints for a binary from database."""
         logger.debug("loading_fingerprints", extra={"binary_id": binary_id})
 
-        statement = select(FunctionFingerprint).where(
-            FunctionFingerprint.binary_id == binary_id
-        )
+        statement = select(FunctionFingerprint).where(FunctionFingerprint.binary_id == binary_id)
         result = await session.exec(statement)  # type: ignore
         fingerprints = result.all()
 
         fp_dict = {fp.func_name: fp.content_hash for fp in fingerprints}
-        logger.debug("fingerprints_loaded", extra={
-            "binary_id": binary_id,
-            "fingerprint_count": len(fp_dict),
-        })
+        logger.debug(
+            "fingerprints_loaded",
+            extra={
+                "binary_id": binary_id,
+                "fingerprint_count": len(fp_dict),
+            },
+        )
         return fp_dict
 
     @staticmethod
@@ -173,9 +172,12 @@ class BinaryMatcher:
         score = matching / max_count
         final_score = min(score, 1.0)  # Ensure 0.0-1.0 range
 
-        logger.debug("match_scored", extra={
-            "matching_count": matching,
-            "max_count": max_count,
-            "score": final_score,
-        })
+        logger.debug(
+            "match_scored",
+            extra={
+                "matching_count": matching,
+                "max_count": max_count,
+                "score": final_score,
+            },
+        )
         return final_score

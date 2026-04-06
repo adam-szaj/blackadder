@@ -33,9 +33,7 @@ class AsyncDatabaseManager:
             if db_url == "sqlite+aiosqlite:///:memory:":
                 pass  # OK
             else:
-                raise ValueError(
-                    f"Only aiosqlite:// URLs supported, got {db_url}"
-                )
+                raise ValueError(f"Only aiosqlite:// URLs supported, got {db_url}")
 
         self.db_url = db_url
         self.echo = echo

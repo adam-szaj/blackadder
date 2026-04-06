@@ -46,18 +46,24 @@ class CoreDumpParser:
         """
         # Input validation
         if not isinstance(core_path, str):
-            logger.error("invalid_core_path_type", extra={
-                "type": type(core_path).__name__,
-            })
+            logger.error(
+                "invalid_core_path_type",
+                extra={
+                    "type": type(core_path).__name__,
+                },
+            )
             raise FileFormatError("core_path must be string")
 
         core_file = Path(core_path)
 
         # Check file exists
         if not core_file.exists():
-            logger.warning("core_dump_file_not_found", extra={
-                "core_path": core_path,
-            })
+            logger.warning(
+                "core_dump_file_not_found",
+                extra={
+                    "core_path": core_path,
+                },
+            )
             return CoreDumpResult(
                 mappings=[],
                 status="file_not_found",
@@ -67,9 +73,12 @@ class CoreDumpParser:
 
         # Check file readable
         if not core_file.is_file():
-            logger.warning("core_dump_not_a_file", extra={
-                "core_path": core_path,
-            })
+            logger.warning(
+                "core_dump_not_a_file",
+                extra={
+                    "core_path": core_path,
+                },
+            )
             return CoreDumpResult(
                 mappings=[],
                 status="permission_denied",
@@ -80,11 +89,14 @@ class CoreDumpParser:
         # Check file size
         file_size = core_file.stat().st_size
         if file_size > self.config.max_core_dump_size:
-            logger.warning("core_dump_exceeds_size_limit", extra={
-                "core_path": core_path,
-                "file_size_mb": file_size / (1024**2),
-                "limit_mb": self.config.max_core_dump_size / (1024**2),
-            })
+            logger.warning(
+                "core_dump_exceeds_size_limit",
+                extra={
+                    "core_path": core_path,
+                    "file_size_mb": file_size / (1024**2),
+                    "limit_mb": self.config.max_core_dump_size / (1024**2),
+                },
+            )
             return CoreDumpResult(
                 mappings=[],
                 status="file_too_large",
@@ -92,18 +104,24 @@ class CoreDumpParser:
                 core_path=core_path,
             )
 
-        logger.debug("core_dump_parsing_started", extra={
-            "core_path": core_path,
-            "file_size_mb": file_size / (1024**2),
-        })
+        logger.debug(
+            "core_dump_parsing_started",
+            extra={
+                "core_path": core_path,
+                "file_size_mb": file_size / (1024**2),
+            },
+        )
 
         # Step 1: Parse ELF headers
         headers_output = await self._get_readelf_output(core_path, ["-h"])
 
         if not headers_output:
-            logger.warning("failed_to_read_elf_headers", extra={
-                "core_path": core_path,
-            })
+            logger.warning(
+                "failed_to_read_elf_headers",
+                extra={
+                    "core_path": core_path,
+                },
+            )
             return CoreDumpResult(
                 mappings=[],
                 status="parse_error",
@@ -114,10 +132,13 @@ class CoreDumpParser:
         elf_headers = self.parse_elf_headers(headers_output)
 
         if elf_headers.get("type") != "ET_CORE":
-            logger.warning("not_a_core_dump", extra={
-                "core_path": core_path,
-                "elf_type": elf_headers.get("type"),
-            })
+            logger.warning(
+                "not_a_core_dump",
+                extra={
+                    "core_path": core_path,
+                    "elf_type": elf_headers.get("type"),
+                },
+            )
             return CoreDumpResult(
                 mappings=[],
                 status="not_core_dump",
@@ -129,9 +150,12 @@ class CoreDumpParser:
         prog_output = await self._get_readelf_output(core_path, ["-l"])
 
         if not prog_output:
-            logger.warning("failed_to_read_program_headers", extra={
-                "core_path": core_path,
-            })
+            logger.warning(
+                "failed_to_read_program_headers",
+                extra={
+                    "core_path": core_path,
+                },
+            )
             return CoreDumpResult(
                 mappings=[],
                 status="parse_error",
@@ -145,9 +169,12 @@ class CoreDumpParser:
         memory_mappings = self.extract_memory_segments(program_headers)
 
         if not memory_mappings:
-            logger.warning("no_load_segments_found", extra={
-                "core_path": core_path,
-            })
+            logger.warning(
+                "no_load_segments_found",
+                extra={
+                    "core_path": core_path,
+                },
+            )
             return CoreDumpResult(
                 mappings=[],
                 status="parse_error",
@@ -158,12 +185,15 @@ class CoreDumpParser:
         # Step 4: Extract metadata from PT_NOTE
         metadata = self._extract_metadata_from_program_headers(program_headers)
 
-        logger.info("core_dump_parsed", extra={
-            "core_path": core_path,
-            "segment_count": len(memory_mappings),
-            "program_header_count": len(program_headers),
-            "pid": metadata.get("pid"),
-        })
+        logger.info(
+            "core_dump_parsed",
+            extra={
+                "core_path": core_path,
+                "segment_count": len(memory_mappings),
+                "program_header_count": len(program_headers),
+                "pid": metadata.get("pid"),
+            },
+        )
 
         return CoreDumpResult(
             mappings=memory_mappings,
@@ -174,9 +204,7 @@ class CoreDumpParser:
             core_path=core_path,
         )
 
-    async def _get_readelf_output(
-        self, core_path: str, args: list[str]
-    ) -> str | None:
+    async def _get_readelf_output(self, core_path: str, args: list[str]) -> str | None:
         """
         Get readelf output for core dump.
 
@@ -234,7 +262,7 @@ class CoreDumpParser:
         prog_header_pattern = re.compile(
             r"(\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)"
             r"\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+([\w\-\s]+?)\s+0x",
-            re.IGNORECASE
+            re.IGNORECASE,
         )
 
         failed_count = 0
@@ -255,10 +283,13 @@ class CoreDumpParser:
                 failed_count += 1
                 # Continue parsing other headers rather than failing
 
-        logger.debug("program_headers_parsed", extra={
-            "header_count": len(headers),
-            "failed_count": failed_count,
-        })
+        logger.debug(
+            "program_headers_parsed",
+            extra={
+                "header_count": len(headers),
+                "failed_count": failed_count,
+            },
+        )
         return headers
 
     @staticmethod
@@ -283,19 +314,25 @@ class CoreDumpParser:
             vaddr = header["vaddr"]
             memsz = header["memsz"]
             if vaddr < 0 or memsz < 0:
-                logger.debug("negative_segment_values", extra={
-                    "index": idx,
-                    "vaddr": vaddr,
-                    "memsz": memsz,
-                })
+                logger.debug(
+                    "negative_segment_values",
+                    extra={
+                        "index": idx,
+                        "vaddr": vaddr,
+                        "memsz": memsz,
+                    },
+                )
                 skipped_count += 1
                 continue
 
             if memsz > 0x40000000:  # 1GB
-                logger.warning("oversized_segment", extra={
-                    "index": idx,
-                    "size_gb": memsz / (1024**3),
-                })
+                logger.warning(
+                    "oversized_segment",
+                    extra={
+                        "index": idx,
+                        "size_gb": memsz / (1024**3),
+                    },
+                )
                 # Continue anyway
 
             # Convert flags to permissions
@@ -317,11 +354,14 @@ class CoreDumpParser:
 
             mappings.append(mapping)
 
-        logger.debug("memory_segments_extracted", extra={
-            "segment_count": len(mappings),
-            "total_headers": len(program_headers),
-            "skipped_count": skipped_count,
-        })
+        logger.debug(
+            "memory_segments_extracted",
+            extra={
+                "segment_count": len(mappings),
+                "total_headers": len(program_headers),
+                "skipped_count": skipped_count,
+            },
+        )
         return mappings
 
     async def extract_register_state(self, core_path: str) -> dict:
@@ -341,7 +381,9 @@ class CoreDumpParser:
         # Look for register values in notes output
         # Readelf -n output contains register values as hex
         # Pattern: "R15:" or similar
-        register_pattern = re.compile(r"(?:RAX|RBX|RCX|RDX|RSI|RDI|RBP|RSP|RIP|R\d+):\s+([0-9a-f]+)")
+        register_pattern = re.compile(
+            r"(?:RAX|RBX|RCX|RDX|RSI|RDI|RBP|RSP|RIP|R\d+):\s+([0-9a-f]+)"
+        )
 
         failed_count = 0
         for match in register_pattern.finditer(notes_output, re.IGNORECASE):
@@ -350,15 +392,21 @@ class CoreDumpParser:
                 reg_value = int(match.group(1), 16)
                 registers[reg_name] = reg_value
             except ValueError:
-                logger.debug("malformed_register_value", extra={
-                    "value": match.group(1),
-                })
+                logger.debug(
+                    "malformed_register_value",
+                    extra={
+                        "value": match.group(1),
+                    },
+                )
                 failed_count += 1
 
-        logger.debug("register_state_extracted", extra={
-            "register_count": len(registers),
-            "failed_count": failed_count,
-        })
+        logger.debug(
+            "register_state_extracted",
+            extra={
+                "register_count": len(registers),
+                "failed_count": failed_count,
+            },
+        )
         return registers
 
     @staticmethod

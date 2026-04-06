@@ -36,9 +36,7 @@ def _get_config_or_default() -> BlackadderConfig:
 
 @app.command()
 async def load_process(
-    maps_file: str = typer.Option(
-        ..., "--maps", "-m", help="Path to /proc/PID/maps file"
-    ),
+    maps_file: str = typer.Option(..., "--maps", "-m", help="Path to /proc/PID/maps file"),
     pid: int | None = typer.Option(None, "--pid", "-p", help="Process ID"),
     db: str | None = typer.Option(
         None, "--db", "-d", help="Path to process database (default: blackadder-process.db)"
@@ -117,12 +115,8 @@ async def decode_backtrace(
         None, "--trace", "-t", help="Backtrace file (or read from stdin)"
     ),
     pid: int = typer.Option(..., "--pid", "-p", help="Process ID or snapshot ID"),
-    db: str | None = typer.Option(
-        None, "--db", "-d", help="Path to process database"
-    ),
-    jobs: int = typer.Option(
-        32, "--jobs", "-j", help="Max parallel symbol resolutions"
-    ),
+    db: str | None = typer.Option(None, "--db", "-d", help="Path to process database"),
+    jobs: int = typer.Option(32, "--jobs", "-j", help="Max parallel symbol resolutions"),
 ) -> None:
     """
     Decode backtrace to function names and optional line numbers.
@@ -214,12 +208,8 @@ async def decode_backtrace(
 @app.command()
 async def syms(
     pid: int = typer.Option(..., "--pid", "-p", help="Process ID"),
-    address: str | None = typer.Option(
-        None, "--address", "-a", help="Address to resolve (hex)"
-    ),
-    db: str | None = typer.Option(
-        None, "--db", "-d", help="Path to process database"
-    ),
+    address: str | None = typer.Option(None, "--address", "-a", help="Address to resolve (hex)"),
+    db: str | None = typer.Option(None, "--db", "-d", help="Path to process database"),
 ) -> None:
     """
     Resolve an address to its symbol and memory mapping.
@@ -287,9 +277,7 @@ async def syms(
 
 @app.command()
 async def load_core_dump(
-    core_file: str = typer.Option(
-        ..., "--core", "-c", help="Path to ELF core dump file"
-    ),
+    core_file: str = typer.Option(..., "--core", "-c", help="Path to ELF core dump file"),
     db: str | None = typer.Option(
         None, "--db", "-d", help="Path to process database (default: blackadder-process.db)"
     ),
@@ -393,9 +381,7 @@ async def analyze_memory(
         console.print()
         console.print("[green]Memory Analysis Results[/green]")
         console.print(f"Regions analyzed: {result['regions_analyzed']}")
-        console.print(
-            f"Regions with anomalies: {len(result['anomalies'])} anomalies detected"
-        )
+        console.print(f"Regions with anomalies: {len(result['anomalies'])} anomalies detected")
         console.print(
             f"Corruption risk: {result['corruption_risk']:.1%} "
             f"({result['corruption_count']} regions suspicious)"

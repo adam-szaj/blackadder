@@ -192,9 +192,7 @@ class ProcessBinary(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
-    binary_id: int | None = Field(
-        default=None, foreign_key="binary.id"
-    )  # None if binary not found
+    binary_id: int | None = Field(default=None, foreign_key="binary.id")  # None if binary not found
     mapping_id: int = Field(foreign_key="memorymapping.id")
     binary_load_addr: int  # Base address where binary is loaded
 

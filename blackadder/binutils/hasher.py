@@ -52,18 +52,24 @@ class FunctionHasher:
         """
         # Input validation
         if not isinstance(binary_path, str):
-            logger.error("invalid_binary_path_type", extra={
-                "type": type(binary_path).__name__,
-            })
+            logger.error(
+                "invalid_binary_path_type",
+                extra={
+                    "type": type(binary_path).__name__,
+                },
+            )
             raise FileFormatError("binary_path must be string")
 
         binary_file = Path(binary_path)
 
         # Check file exists
         if not binary_file.exists():
-            logger.warning("binary_file_not_found", extra={
-                "binary_path": binary_path,
-            })
+            logger.warning(
+                "binary_file_not_found",
+                extra={
+                    "binary_path": binary_path,
+                },
+            )
             return FingerprintResult(
                 fingerprints={},
                 status="file_not_found",
@@ -73,9 +79,12 @@ class FunctionHasher:
 
         # Check file readable
         if not binary_file.is_file():
-            logger.warning("binary_not_a_file", extra={
-                "binary_path": binary_path,
-            })
+            logger.warning(
+                "binary_not_a_file",
+                extra={
+                    "binary_path": binary_path,
+                },
+            )
             return FingerprintResult(
                 fingerprints={},
                 status="permission_denied",
@@ -86,11 +95,14 @@ class FunctionHasher:
         # Check file size
         file_size = binary_file.stat().st_size
         if file_size > self.config.max_core_dump_size:
-            logger.warning("binary_exceeds_size_limit", extra={
-                "binary_path": binary_path,
-                "file_size_mb": file_size / (1024**2),
-                "limit_mb": self.config.max_core_dump_size / (1024**2),
-            })
+            logger.warning(
+                "binary_exceeds_size_limit",
+                extra={
+                    "binary_path": binary_path,
+                    "file_size_mb": file_size / (1024**2),
+                    "limit_mb": self.config.max_core_dump_size / (1024**2),
+                },
+            )
             return FingerprintResult(
                 fingerprints={},
                 status="file_too_large",
@@ -98,18 +110,24 @@ class FunctionHasher:
                 binary_path=binary_path,
             )
 
-        logger.debug("fingerprint_computation_started", extra={
-            "binary_path": binary_path,
-            "file_size_mb": file_size / (1024**2),
-        })
+        logger.debug(
+            "fingerprint_computation_started",
+            extra={
+                "binary_path": binary_path,
+                "file_size_mb": file_size / (1024**2),
+            },
+        )
 
         # Step 1: Get function boundaries from symbol table
         function_info = await self._extract_function_info(binary_path)
 
         if not function_info:
-            logger.warning("no_function_symbols", extra={
-                "binary_path": binary_path,
-            })
+            logger.warning(
+                "no_function_symbols",
+                extra={
+                    "binary_path": binary_path,
+                },
+            )
             return FingerprintResult(
                 fingerprints={},
                 status="no_functions",
@@ -121,9 +139,12 @@ class FunctionHasher:
         disassembly = await self._get_disassembly(binary_path)
 
         if not disassembly:
-            logger.warning("no_disassembly_generated", extra={
-                "binary_path": binary_path,
-            })
+            logger.warning(
+                "no_disassembly_generated",
+                extra={
+                    "binary_path": binary_path,
+                },
+            )
             return FingerprintResult(
                 fingerprints={},
                 status="parse_error",
@@ -142,9 +163,7 @@ class FunctionHasher:
                 end_addr = start_addr + size
 
                 # Extract function disassembly bytes
-                func_asm = self._extract_function_asm(
-                    disassembly, start_addr, end_addr, func_name
-                )
+                func_asm = self._extract_function_asm(disassembly, start_addr, end_addr, func_name)
 
                 if func_asm:
                     # Normalize and hash
@@ -152,19 +171,25 @@ class FunctionHasher:
                     content_hash = hashlib.sha256(normalized).hexdigest()
                     fingerprints[func_name] = content_hash
             except Exception as e:
-                logger.debug("function_fingerprint_failed", extra={
-                    "binary_path": binary_path,
-                    "function": func_name,
-                    "error": str(e),
-                })
+                logger.debug(
+                    "function_fingerprint_failed",
+                    extra={
+                        "binary_path": binary_path,
+                        "function": func_name,
+                        "error": str(e),
+                    },
+                )
                 failed_funcs += 1
 
-        logger.info("fingerprint_computation_completed", extra={
-            "binary_path": binary_path,
-            "fingerprint_count": len(fingerprints),
-            "failed_count": failed_funcs,
-            "total_functions": len(function_info),
-        })
+        logger.info(
+            "fingerprint_computation_completed",
+            extra={
+                "binary_path": binary_path,
+                "fingerprint_count": len(fingerprints),
+                "failed_count": failed_funcs,
+                "total_functions": len(function_info),
+            },
+        )
 
         return FingerprintResult(
             fingerprints=fingerprints,
@@ -227,10 +252,13 @@ class FunctionHasher:
             return result
 
         function_info = await asyncio.to_thread(parse_symbols, lines)
-        logger.debug("function_symbols_extracted", extra={
-            "binary_path": binary_path,
-            "function_count": len(function_info),
-        })
+        logger.debug(
+            "function_symbols_extracted",
+            extra={
+                "binary_path": binary_path,
+                "function_count": len(function_info),
+            },
+        )
         return function_info
 
     async def _get_disassembly(self, binary_path: str) -> str:
@@ -251,10 +279,13 @@ class FunctionHasher:
             return ""
 
         result = "\n".join(lines)
-        logger.debug("disassembly_generated", extra={
-            "binary_path": binary_path,
-            "line_count": len(lines),
-        })
+        logger.debug(
+            "disassembly_generated",
+            extra={
+                "binary_path": binary_path,
+                "line_count": len(lines),
+            },
+        )
         return result
 
     def _extract_function_asm(
@@ -288,10 +319,13 @@ class FunctionHasher:
                     instruction = parts[-1]
                     func_lines.append(instruction)
 
-        logger.debug("function_assembly_extracted", extra={
-            "function_name": func_name,
-            "line_count": len(func_lines),
-        })
+        logger.debug(
+            "function_assembly_extracted",
+            extra={
+                "function_name": func_name,
+                "line_count": len(func_lines),
+            },
+        )
         return func_lines
 
     @staticmethod
@@ -351,8 +385,11 @@ class FunctionHasher:
         # Join and encode for hashing
         normalized_text = "\n".join(normalized_lines)
         result = normalized_text.encode("utf-8")
-        logger.debug("assembly_normalized", extra={
-            "input_lines": len(asm_lines),
-            "output_bytes": len(result),
-        })
+        logger.debug(
+            "assembly_normalized",
+            extra={
+                "input_lines": len(asm_lines),
+                "output_bytes": len(result),
+            },
+        )
         return result

@@ -34,7 +34,7 @@ class TestBinaryMatcherScoring:
         target_fps = {"main": "abc123", "foo": "def456", "bar": "ghi789"}
         candidate_fps = {
             "main": "abc123",  # Match
-            "foo": "def456",   # Match
+            "foo": "def456",  # Match
             "bar": "different",  # No match (different hash)
             "other": "xyz789",
         }
@@ -170,15 +170,21 @@ class TestBinaryMatcherFindMatches:
 
             # Add fingerprints for bin1 (perfect match)
             fp1_main = FunctionFingerprint(
-                binary_id=bin1.id, func_name="main", func_offset=0, func_size=100,
-                content_hash="hash1"
+                binary_id=bin1.id,
+                func_name="main",
+                func_offset=0,
+                func_size=100,
+                content_hash="hash1",
             )
             session.add(fp1_main)
 
             # Add fingerprints for bin2 (partial match)
             fp2_foo = FunctionFingerprint(
-                binary_id=bin2.id, func_name="foo", func_offset=100, func_size=50,
-                content_hash="hash2"
+                binary_id=bin2.id,
+                func_name="foo",
+                func_offset=100,
+                func_size=50,
+                content_hash="hash2",
             )
             session.add(fp2_foo)
             await session.commit()
@@ -205,8 +211,11 @@ class TestBinaryMatcherFindMatches:
 
             # Add low-match fingerprints
             fp = FunctionFingerprint(
-                binary_id=binary.id, func_name="other", func_offset=0, func_size=100,
-                content_hash="different"
+                binary_id=binary.id,
+                func_name="other",
+                func_offset=0,
+                func_size=100,
+                content_hash="different",
             )
             session.add(fp)
             await session.commit()
@@ -235,8 +244,11 @@ class TestBinaryMatcherFindMatches:
             await session.commit()
 
             fp = FunctionFingerprint(
-                binary_id=binary.id, func_name="main", func_offset=0, func_size=100,
-                content_hash="hash1"
+                binary_id=binary.id,
+                func_name="main",
+                func_offset=0,
+                func_size=100,
+                content_hash="hash1",
             )
             session.add(fp)
             await session.commit()

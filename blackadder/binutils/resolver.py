@@ -41,9 +41,7 @@ async def resolve_symbol(binary_path: str, offset: int, config) -> str:
     return symbol if symbol else "???"
 
 
-async def _resolve_with_addr2line(
-    binary_path: str, offset: int, config
-) -> str | None:
+async def _resolve_with_addr2line(binary_path: str, offset: int, config) -> str | None:
     """
     Use addr2line to resolve address to function name and line number.
 
@@ -92,9 +90,7 @@ async def _resolve_with_addr2line(
     return None
 
 
-async def _resolve_with_objdump(
-    binary_path: str, offset: int, config
-) -> str | None:
+async def _resolve_with_objdump(binary_path: str, offset: int, config) -> str | None:
     """
     Resolve address using objdump symbol table.
 
@@ -171,14 +167,10 @@ def parse_backtrace_auto(trace_text: str) -> list[int]:
     addresses = []
 
     # Pattern 1: GDB format - extract hex after '#N  '
-    gdb_pattern = re.compile(
-        r"#\d+\s+(?:0x)?([0-9a-f]{1,16})", re.IGNORECASE | re.MULTILINE
-    )
+    gdb_pattern = re.compile(r"#\d+\s+(?:0x)?([0-9a-f]{1,16})", re.IGNORECASE | re.MULTILINE)
 
     # Pattern 2: Kernel format - extract hex in brackets
-    kernel_pattern = re.compile(
-        r"\[<(?:0x)?([0-9a-f]{1,16})>\]", re.IGNORECASE | re.MULTILINE
-    )
+    kernel_pattern = re.compile(r"\[<(?:0x)?([0-9a-f]{1,16})>\]", re.IGNORECASE | re.MULTILINE)
 
     # Pattern 3: Raw hex (with or without 0x prefix)
     raw_pattern = re.compile(r"(?:^|\n)(0x)?([0-9a-f]{1,16})(?:\s|$)", re.IGNORECASE)
@@ -207,13 +199,13 @@ def parse_backtrace_auto(trace_text: str) -> list[int]:
 
     # Fall back to raw hex format
     # Split by lines and look for hex patterns
-    for line in trace_text.split('\n'):
+    for line in trace_text.split("\n"):
         line = line.strip()
         if not line:
             continue
 
         # Try to parse line as hex address (with or without 0x prefix)
-        if line.startswith('0x') or line.startswith('0X'):
+        if line.startswith("0x") or line.startswith("0X"):
             try:
                 addr = int(line, 16)
                 addresses.append(addr)
@@ -222,7 +214,7 @@ def parse_backtrace_auto(trace_text: str) -> list[int]:
                 pass
 
         # Try without 0x prefix
-        if len(line) <= 16 and all(c in '0123456789abcdefABCDEF' for c in line):
+        if len(line) <= 16 and all(c in "0123456789abcdefABCDEF" for c in line):
             try:
                 addr = int(line, 16)
                 addresses.append(addr)

@@ -142,7 +142,7 @@ class TestExtractFunctionAssembly:
     1010: 55                    push   %rbp
         """
 
-        asm_lines = hasher._extract_function_asm(disassembly, 0x1000, 0x100c, "main")
+        asm_lines = hasher._extract_function_asm(disassembly, 0x1000, 0x100C, "main")
 
         # Should extract the push/mov/mov/pop/ret instructions
         assert len(asm_lines) > 0
@@ -171,9 +171,7 @@ class TestExtractFunctionAssembly:
         """Test extraction when function not found."""
         disassembly = "no function content"
 
-        asm_lines = hasher._extract_function_asm(
-            disassembly, 0x1000, 0x2000, "nonexistent"
-        )
+        asm_lines = hasher._extract_function_asm(disassembly, 0x1000, 0x2000, "nonexistent")
 
         # Should return empty list
         assert len(asm_lines) == 0
@@ -191,9 +189,7 @@ class TestComputeFingerprints:
         assert isinstance(fingerprints, dict)
 
     @pytest.mark.requires_tools
-    async def test_compute_fingerprints_hashes_consistent(
-        self, hasher, sample_binary
-    ):
+    async def test_compute_fingerprints_hashes_consistent(self, hasher, sample_binary):
         """Test that fingerprints are consistent for same binary."""
         fps1 = await hasher.compute_fingerprints(sample_binary)
         fps2 = await hasher.compute_fingerprints(sample_binary)

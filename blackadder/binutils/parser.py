@@ -136,9 +136,7 @@ class BinToolsParser:
             Dict mapping address -> symbol name
         """
         # Call objdump via subprocess (async, semaphore-limited)
-        lines = await self.run_command_limited(
-            [self.config.objdump_path, "--syms", binary_path]
-        )
+        lines = await self.run_command_limited([self.config.objdump_path, "--syms", binary_path])
 
         # Parse lines in thread pool (CPU-bound regex)
         def parse_symbols(all_lines):
@@ -166,9 +164,7 @@ class BinToolsParser:
             Dict mapping section name -> {name, size, vma, lma, off, align}
         """
         # Call objdump via subprocess
-        lines = await self.run_command_limited(
-            [self.config.objdump_path, "-h", binary_path]
-        )
+        lines = await self.run_command_limited([self.config.objdump_path, "-h", binary_path])
 
         # Parse in thread pool
         def parse_sections(all_lines):
@@ -235,7 +231,5 @@ def init_parser(config):
 def get_parser() -> BinToolsParser:
     """Get global parser instance (must be initialized first)."""
     if _parser is None:
-        raise RuntimeError(
-            "Parser not initialized. Call init_parser(config) first."
-        )
+        raise RuntimeError("Parser not initialized. Call init_parser(config) first.")
     return _parser

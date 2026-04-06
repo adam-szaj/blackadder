@@ -27,9 +27,7 @@ class RootfsDatabase:
         self.manager = manager
         self.config = config
 
-    async def compute_and_cache_fingerprints(
-        self, binary_id: int, binary_path: str
-    ) -> int:
+    async def compute_and_cache_fingerprints(self, binary_id: int, binary_path: str) -> int:
         """
         Compute fingerprints for a binary and store in DB.
 
@@ -59,7 +57,7 @@ class RootfsDatabase:
                     binary_id=binary_id,
                     func_name=func_name,
                     func_offset=0,  # Not computed by hasher yet
-                    func_size=0,    # Not computed by hasher yet
+                    func_size=0,  # Not computed by hasher yet
                     content_hash=content_hash,
                 )
                 session.add(fp)

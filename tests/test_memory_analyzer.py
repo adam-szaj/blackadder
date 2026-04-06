@@ -29,8 +29,8 @@ class TestClassifyRegion:
         """Test classifying stack with explicit [stack] marker."""
         region_type, confidence = MemoryAnalyzer.classify_region(
             pathname="[stack]",
-            start_addr=0x7fffff000000,
-            end_addr=0x7ffffffff000,
+            start_addr=0x7FFFFF000000,
+            end_addr=0x7FFFFFFFF000,
             perms="rw-p",
             offset=0,
         )
@@ -42,8 +42,8 @@ class TestClassifyRegion:
         """Test classifying VDSO region."""
         region_type, confidence = MemoryAnalyzer.classify_region(
             pathname="[vdso]",
-            start_addr=0x7fff0000,
-            end_addr=0x7ffff000,
+            start_addr=0x7FFF0000,
+            end_addr=0x7FFFF000,
             perms="r-xp",
             offset=0,
         )
@@ -55,8 +55,8 @@ class TestClassifyRegion:
         """Test classifying vsyscall region."""
         region_type, confidence = MemoryAnalyzer.classify_region(
             pathname="[vsyscall]",
-            start_addr=0xffffffffff600000,
-            end_addr=0xffffffffff601000,
+            start_addr=0xFFFFFFFFFF600000,
+            end_addr=0xFFFFFFFFFF601000,
             perms="r-xp",
             offset=0,
         )
@@ -68,8 +68,8 @@ class TestClassifyRegion:
         """Test classifying executable library."""
         region_type, confidence = MemoryAnalyzer.classify_region(
             pathname="/lib/libc.so.6",
-            start_addr=0x7f0000000000,
-            end_addr=0x7f0001000000,
+            start_addr=0x7F0000000000,
+            end_addr=0x7F0001000000,
             perms="r-xp",
             offset=0,
         )
@@ -93,13 +93,13 @@ class TestClassifyRegion:
     def test_classify_stack_by_register(self):
         """Test stack detection via register state (RSP)."""
         register_state = {
-            "rsp": 0x7fffffffde00,
-            "rbp": 0x7fffffffde10,
+            "rsp": 0x7FFFFFFFDE00,
+            "rbp": 0x7FFFFFFFDE10,
         }
 
         region_type, confidence = MemoryAnalyzer.classify_region(
             pathname="",
-            start_addr=0x7fffffe00000,
+            start_addr=0x7FFFFFE00000,
             end_addr=0x8000000000000,
             perms="rw-p",
             offset=0,
@@ -289,8 +289,8 @@ class TestAnalyzeMemoryRegion:
         """Test analyzing a library region."""
         analysis = MemoryAnalyzer.analyze_memory_region(
             pathname="/lib/libc.so.6",
-            start_addr=0x7f0000000000,
-            end_addr=0x7f0001000000,
+            start_addr=0x7F0000000000,
+            end_addr=0x7F0001000000,
             perms="r-xp",
             offset=0,
         )
@@ -307,10 +307,10 @@ class TestRegisterDisplay:
     def test_format_register_display(self):
         """Test formatting register display."""
         register_state = {
-            "rax": 0x123456789abcdef0,
+            "rax": 0x123456789ABCDEF0,
             "rbx": 0x0,
-            "rip": 0x400a1c,
-            "rsp": 0x7fffffffde00,
+            "rip": 0x400A1C,
+            "rsp": 0x7FFFFFFFDE00,
         }
 
         display = MemoryAnalyzer.format_register_display(register_state)

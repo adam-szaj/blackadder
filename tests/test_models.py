@@ -21,12 +21,12 @@ from blackadder.binutils.resolver import parse_backtrace_auto
 def test_resolved_frame_valid():
     """Test ResolvedFrame model with valid data."""
     frame = ResolvedFrame(
-        address=0x400a1c,
+        address=0x400A1C,
         frame_num=0,
         symbol="main",
     )
 
-    assert frame.address == 0x400a1c
+    assert frame.address == 0x400A1C
     assert frame.frame_num == 0
     assert frame.symbol == "main"
 
@@ -34,7 +34,7 @@ def test_resolved_frame_valid():
 def test_resolved_frame_empty_symbol():
     """Test ResolvedFrame validates empty symbols."""
     frame = ResolvedFrame(
-        address=0x400a1c,
+        address=0x400A1C,
         frame_num=0,
         symbol="",
     )
@@ -46,7 +46,7 @@ def test_resolved_frame_empty_symbol():
 def test_resolved_frame_with_line_info():
     """Test ResolvedFrame with source file and line number."""
     frame = ResolvedFrame(
-        address=0x400a1c,
+        address=0x400A1C,
         frame_num=0,
         symbol="main",
         file="main.c",
@@ -121,9 +121,9 @@ def test_parse_gdb_backtrace():
     addresses = parse_backtrace_auto(gdb_trace)
 
     assert len(addresses) == 3
-    assert addresses[0] == 0x555555554c84
-    assert addresses[1] == 0x7ffff7e1c5c0
-    assert addresses[2] == 0x7ffff7e1c5d2
+    assert addresses[0] == 0x555555554C84
+    assert addresses[1] == 0x7FFFF7E1C5C0
+    assert addresses[2] == 0x7FFFF7E1C5D2
 
 
 def test_parse_kernel_backtrace():
@@ -135,9 +135,9 @@ def test_parse_kernel_backtrace():
     addresses = parse_backtrace_auto(kernel_trace)
 
     assert len(addresses) == 3
-    assert addresses[0] == 0xffffffff81010001
-    assert addresses[1] == 0xffffffff81010002
-    assert addresses[2] == 0xffffffff81010003
+    assert addresses[0] == 0xFFFFFFFF81010001
+    assert addresses[1] == 0xFFFFFFFF81010002
+    assert addresses[2] == 0xFFFFFFFF81010003
 
 
 def test_parse_mixed_format_prefers_gdb():
@@ -150,4 +150,4 @@ def test_parse_mixed_format_prefers_gdb():
 
     # Should detect GDB format and only extract GDB addresses
     assert len(addresses) >= 1
-    assert 0x555555554c84 in addresses
+    assert 0x555555554C84 in addresses

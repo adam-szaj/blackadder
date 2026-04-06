@@ -44,7 +44,7 @@ async def test_address_to_binary_not_found(process_db, sample_maps_content):
     process = await process_db.load_maps(12345, sample_maps_content)
 
     # Address way outside mapped regions
-    binary_info = await process_db.address_to_binary(process.id, 0xdeadbeef)
+    binary_info = await process_db.address_to_binary(process.id, 0xDEADBEEF)
 
     assert binary_info is None
 
@@ -127,8 +127,8 @@ async def test_decode_backtrace_with_unmapped_address(process_db, sample_maps_co
     # Mix of valid and invalid addresses
     addresses = [
         0x555555554100,  # Valid: in main binary
-        0xdeadbeef,      # Invalid: unmapped
-        0x7ffff7e00100,  # Valid: in libc
+        0xDEADBEEF,  # Invalid: unmapped
+        0x7FFFF7E00100,  # Valid: in libc
     ]
 
     frames = await process_db.decode_backtrace(process.id, addresses)
@@ -136,9 +136,9 @@ async def test_decode_backtrace_with_unmapped_address(process_db, sample_maps_co
     # Should have 3 frames, but some with "???" symbols
     assert len(frames) == 3
     assert frames[0].address == 0x555555554100
-    assert frames[1].address == 0xdeadbeef
+    assert frames[1].address == 0xDEADBEEF
     assert frames[1].symbol == "???"  # Unmapped
-    assert frames[2].address == 0x7ffff7e00100
+    assert frames[2].address == 0x7FFFF7E00100
 
 
 @pytest.mark.asyncio
