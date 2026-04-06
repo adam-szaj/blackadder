@@ -16,6 +16,11 @@ import pytest_asyncio
 from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
 from blackadder.models import SQLModel
+from tests.fixtures.phase3_data import (
+    MOCK_PROCESSES,
+    MOCK_MEMORY_MAPPINGS,
+    MOCK_REGISTER_STATES,
+)
 
 # ============================================================================
 # Async event loop configuration
@@ -154,6 +159,29 @@ def sample_gdb_backtrace() -> str:
 #1  0x00007ffff7e1c5c0 in __libc_start_main (main=0x555555554c00 <main>, argc=1, argv=0x7fffffffde88, init=<optimized out>, fini=<optimized out>, rtld_fini=0x7ffff7ffd980 <_dl_fini>, stack_end=0x7fffffffde78) at ../csu/libc-start.c:308
 #2  0x00007ffff7e1c5d2 in _start () from /lib64/ld-linux-x86-64.so.2
 """
+
+
+# ============================================================================
+# Phase 3 mock data fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def mock_processes():
+    """Provides all mock process snapshots (x86_64, arm64, arm)."""
+    return MOCK_PROCESSES
+
+
+@pytest.fixture
+def mock_memory_mappings():
+    """Provides mock memory layouts per architecture."""
+    return MOCK_MEMORY_MAPPINGS
+
+
+@pytest.fixture
+def mock_register_states():
+    """Provides mock register states with code/heap/stack pointers."""
+    return MOCK_REGISTER_STATES
 
 
 # ============================================================================

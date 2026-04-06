@@ -7,7 +7,7 @@ Defines models for both rootfs database (binary metadata) and process database
 
 from datetime import datetime
 from enum import Enum
-
+from typing import Optional
 
 from pydantic import BaseModel, field_validator
 from sqlmodel import Field, Relationship, SQLModel
@@ -160,7 +160,7 @@ class ProcessSnapshot(SQLModel, table=True):
     # Relationships
     mappings: list["MemoryMapping"] = Relationship(back_populates="process")
     process_binaries: list["ProcessBinary"] = Relationship(back_populates="process")
-    register_state: "ProcessRegisterState" | None = Relationship(back_populates="process")
+    register_state: Optional["ProcessRegisterState"] = Relationship(back_populates="process")
 
 
 class MemoryMapping(SQLModel, table=True):
@@ -180,7 +180,7 @@ class MemoryMapping(SQLModel, table=True):
 
     # Relationships
     process: ProcessSnapshot = Relationship(back_populates="mappings")
-    analysis: "MemoryRegionAnalysis" | None = Relationship(back_populates="mapping")
+    analysis: Optional["MemoryRegionAnalysis"] = Relationship(back_populates="mapping")
 
 
 class ProcessBinary(SQLModel, table=True):
@@ -302,11 +302,3 @@ class MemoryRegionAnalysis(SQLModel, table=True):
 
     # Relationships
     mapping: MemoryMapping = Relationship(back_populates="analysis")
-
-
-# Add relationships to ProcessSnapshot
-ProcessSnapshot.update_forward_refs()
-
-
-# Add relationships to MemoryMapping (update after MemoryRegionAnalysis defined)
-MemoryMapping.update_forward_refs()
