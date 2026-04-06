@@ -68,20 +68,24 @@ class MemoryAnalyzer:
         """
         # Input validation (Phase 2 hardening)
         if start_addr < 0 or end_addr < 0:
-            logger.warning(f"Negative address: {start_addr:#x} to {end_addr:#x}")
+            logger.warning("negative_address_in_region", extra={
+                "start_addr": start_addr,
+                "end_addr": end_addr,
+            })
             raise ValidationError(f"Negative addresses not allowed")
 
         if start_addr >= end_addr:
-            logger.warning(f"Invalid address range: {start_addr:#x} >= {end_addr:#x}")
+            logger.warning("invalid_address_range_in_region", extra={
+                "start_addr": start_addr,
+                "end_addr": end_addr,
+            })
             raise ValidationError(f"start_addr must be less than end_addr")
 
         if len(perms) != 4 or perms[3] not in "ps":
-            logger.warning(f"Invalid permissions string: {perms}")
+            logger.warning("invalid_permissions_string", extra={
+                "perms": perms,
+            })
             raise ValidationError(f"Invalid permissions (expected 4 chars like 'rw-p')")
-
-        if not isinstance(pathname, str):
-            logger.warning(f"Invalid pathname type: {type(pathname)}")
-            raise ValidationError(f"pathname must be string")
 
         size = end_addr - start_addr
 
@@ -208,32 +212,31 @@ class MemoryAnalyzer:
 
         Returns:
             True if potential corruption detected
-
-        Raises:
-            ValidationError: If inputs are invalid
         """
-        try:
-            # Executable heap
-            if region_type == MemoryRegionType.HEAP and "x" in perms:
-                logger.warning(f"Executable heap detected: {pathname}")
+        # Executable heap
+        if region_type == MemoryRegionType.HEAP and "x" in perms:
+            logger.warning("executable_heap_detected", extra={
+                "pathname": pathname,
+            })
+            return True
+
+        # RWX region (highly suspicious)
+        if "r" in perms and "w" in perms and "x" in perms:
+            logger.warning("rwx_region_detected", extra={
+                "pathname": pathname,
+            })
+            return True
+
+        # Writable vdso/vsyscall (should be read-only)
+        if region_type in [MemoryRegionType.VDSO, MemoryRegionType.VSYSCALL]:
+            if "w" in perms:
+                logger.warning("writable_system_region_detected", extra={
+                    "region_type": region_type.value,
+                    "pathname": pathname,
+                })
                 return True
 
-            # RWX region (highly suspicious)
-            if "r" in perms and "w" in perms and "x" in perms:
-                logger.warning(f"RWX region detected: {pathname}")
-                return True
-
-            # Writable vdso/vsyscall (should be read-only)
-            if region_type in [MemoryRegionType.VDSO, MemoryRegionType.VSYSCALL]:
-                if "w" in perms:
-                    logger.warning(f"Writable {region_type.value} detected: {pathname}")
-                    return True
-
-            return False
-
-        except Exception as e:
-            logger.error(f"Error checking corruption markers: {e}")
-            raise MemoryAnalysisError(f"Corruption check failed: {e}")
+        return False
 
     @staticmethod
     def analyze_memory_region(
@@ -267,60 +270,67 @@ class MemoryAnalyzer:
 
         Raises:
             ValidationError: If inputs are invalid
-            MemoryAnalysisError: If analysis fails
         """
-        try:
-            # Input validation
-            if start_addr < 0 or end_addr < 0:
-                logger.error(f"Negative addresses: {start_addr:#x} to {end_addr:#x}")
-                raise ValidationError("Negative addresses not allowed")
-
-            if start_addr >= end_addr:
-                logger.error(f"Invalid range: {start_addr:#x} >= {end_addr:#x}")
-                raise ValidationError("start_addr must be less than end_addr")
-
-            size = end_addr - start_addr
-            is_writable = "w" in perms
-            is_executable = "x" in perms
-
-            logger.debug(f"Analyzing region {pathname} ({start_addr:#x}-{end_addr:#x})")
-
-            region_type, confidence = MemoryAnalyzer.classify_region(
-                pathname, start_addr, end_addr, perms, offset, register_state
-            )
-
-            anomalies = MemoryAnalyzer.detect_anomalies(
-                region_type, perms, size, pathname
-            )
-
-            likely_corrupted = MemoryAnalyzer.check_corruption_markers(
-                region_type, perms, pathname
-            )
-
-            result = {
-                "region_type": region_type.value,
-                "confidence": confidence,
-                "is_writable": is_writable,
-                "is_executable": is_executable,
-                "likely_corrupted": likely_corrupted,
-                "anomalies": anomalies,
-                "size": size,
+        # Input validation
+        if start_addr < 0 or end_addr < 0:
+            logger.warning("negative_addresses_in_analysis", extra={
                 "start_addr": start_addr,
                 "end_addr": end_addr,
-            }
+            })
+            raise ValidationError("Negative addresses not allowed")
 
-            logger.debug(
-                f"Analysis complete: {region_type.value} "
-                f"(confidence={confidence:.2f}, corrupted={likely_corrupted})"
-            )
+        if start_addr >= end_addr:
+            logger.warning("invalid_address_range_in_analysis", extra={
+                "start_addr": start_addr,
+                "end_addr": end_addr,
+            })
+            raise ValidationError("start_addr must be less than end_addr")
 
-            return result
+        size = end_addr - start_addr
+        is_writable = "w" in perms
+        is_executable = "x" in perms
 
-        except (ValidationError, MemoryAnalysisError):
-            raise
-        except Exception as e:
-            logger.error(f"Error analyzing region {pathname}: {e}")
-            raise MemoryAnalysisError(f"Analysis failed for {pathname}: {e}")
+        logger.debug("region_analysis_started", extra={
+            "pathname": pathname,
+            "start_addr": start_addr,
+            "end_addr": end_addr,
+            "size": size,
+            "perms": perms,
+        })
+
+        region_type, confidence = MemoryAnalyzer.classify_region(
+            pathname, start_addr, end_addr, perms, offset, register_state
+        )
+
+        anomalies = MemoryAnalyzer.detect_anomalies(
+            region_type, perms, size, pathname
+        )
+
+        likely_corrupted = MemoryAnalyzer.check_corruption_markers(
+            region_type, perms, pathname
+        )
+
+        result = {
+            "region_type": region_type.value,
+            "confidence": confidence,
+            "is_writable": is_writable,
+            "is_executable": is_executable,
+            "likely_corrupted": likely_corrupted,
+            "anomalies": anomalies,
+            "size": size,
+            "start_addr": start_addr,
+            "end_addr": end_addr,
+        }
+
+        logger.debug("region_analysis_completed", extra={
+            "pathname": pathname,
+            "region_type": region_type.value,
+            "confidence": confidence,
+            "anomaly_count": len(anomalies),
+            "likely_corrupted": likely_corrupted,
+        })
+
+        return result
 
     @staticmethod
     def format_register_display(register_state: Optional[dict] = None) -> str:
