@@ -47,6 +47,12 @@ def test_config() -> BlackadderConfig:
     )
 
 
+@pytest.fixture
+def config(test_config) -> BlackadderConfig:
+    """Alias for test_config for convenience."""
+    return test_config
+
+
 # ============================================================================
 # Database fixtures
 # ============================================================================

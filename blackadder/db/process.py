@@ -12,6 +12,7 @@ import re
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from blackadder.models import (
@@ -124,26 +125,39 @@ class ProcessDatabase:
                     })
                     skipped_count += 1
 
-            if len(process.mappings) > self.config.max_memory_regions:
+            mapping_count = len(process.mappings)
+            if mapping_count > self.config.max_memory_regions:
                 logger.error("too_many_regions", extra={
-                    "region_count": len(process.mappings),
+                    "region_count": mapping_count,
                     "max_allowed": self.config.max_memory_regions,
                 })
                 raise ValidationError(
-                    f"Process has too many regions: {len(process.mappings)} "
+                    f"Process has too many regions: {mapping_count} "
                     f"(max {self.config.max_memory_regions})"
                 )
 
             session.add(process)
             await session.commit()
-            await session.refresh(process)
+            process_id = process.id
 
             logger.info("maps_loaded", extra={
                 "pid": pid,
-                "mapping_count": len(process.mappings),
+                "mapping_count": mapping_count,
                 "skipped_count": skipped_count,
+                "process_id": process_id,
             })
-            return process
+
+        # Re-fetch the process with eager-loaded relationships
+        # selectinload() fetches the relationship in a separate query before session closes
+        async with self.manager.get_session() as session:
+            statement = select(ProcessSnapshot).where(
+                ProcessSnapshot.id == process_id
+            ).options(selectinload(ProcessSnapshot.mappings))
+
+            result = await session.exec(statement)
+            process = result.first()
+
+        return process
 
     async def address_to_binary(
         self, pid: int, addr: int
@@ -706,6 +720,12 @@ class ProcessDatabase:
         parsed = []
         failed_lines = 0
 
+        def to_signed_64bit(val: int) -> int:
+            """Convert unsigned 64-bit value to signed (two's complement)."""
+            if val >= 0x8000000000000000:
+                return val - 0x10000000000000000
+            return val
+
         for idx, line in enumerate(lines):
             line = line.strip()
             if not line:
@@ -720,8 +740,8 @@ class ProcessDatabase:
                 continue
 
             try:
-                start_addr = int(m.group(1), 16)
-                end_addr = int(m.group(2), 16)
+                start_addr = to_signed_64bit(int(m.group(1), 16))
+                end_addr = to_signed_64bit(int(m.group(2), 16))
                 perms = m.group(3)
                 offset = int(m.group(4), 16)
                 pathname = m.group(6).strip() or "[anonymous]"

@@ -237,10 +237,10 @@ class CoreDumpParser:
 
         # Pattern: "Type           Offset             VirtAddr           PhysAddr"
         # "LOAD           0x0000000000001000 0x0000555555554000 0x0000000000000000"
-        # "         0x0000000000001000 0x0000000000001000  R                0x1000"
+        # "         0x0000000000001000 0x0000000000001000  R E                0x1000"
         prog_header_pattern = re.compile(
             r"(\S+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)"
-            r"\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+([\w\-]+)",
+            r"\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+([\w\-\s]+?)\s+0x",
             re.IGNORECASE
         )
 
