@@ -29,14 +29,9 @@ class BlackadderConfig(BaseSettings):
     # Database configuration
     # =========================================================================
 
-    rootfs_db: str = Field(
-        default="sqlite+aiosqlite:///blackadder-rootfs.db",
-        description="Path to rootfs (binary metadata) database",
-    )
-
-    process_db: str = Field(
-        default="sqlite+aiosqlite:///blackadder-process.db",
-        description="Path to process (runtime analysis) database",
+    db: str = Field(
+        default="sqlite+aiosqlite:///blackadder.db",
+        description="Path to the unified database (binary metadata + process snapshots)",
     )
 
     # =========================================================================

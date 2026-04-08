@@ -9,8 +9,10 @@ Includes comprehensive error handling and validation (Phase 2 hardening).
 import asyncio
 import logging
 import re
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from blackadder.exceptions import (
@@ -57,7 +59,14 @@ class ProcessDatabase:
         # Avoids repeated subprocess calls for same symbol
         self.symbol_cache: dict[tuple[str, int], str] = {}
 
-    async def load_maps(self, pid: int | None, maps_text: str) -> ProcessSnapshot:
+    async def load_maps(
+        self,
+        pid: int | None,
+        maps_text: str,
+        rootfs: str = "/",
+        debugfs: str | None = None,
+        tag: str | None = None,
+    ) -> ProcessSnapshot:
         """
         Parse /proc/PID/maps and create ProcessSnapshot with MemoryMappings.
 
@@ -96,6 +105,7 @@ class ProcessDatabase:
             process = ProcessSnapshot(
                 pid=pid,
                 description=f"Process {pid}" if pid else "Offline analysis",
+                tag=tag,
             )
 
             # Parse maps lines in thread pool (CPU-bound regex)
@@ -154,14 +164,18 @@ class ProcessDatabase:
                 },
             )
 
-        # Re-fetch the process to ensure mappings are accessible
-        # Note: AsyncSession.exec is provided by sqlmodel but not in type stubs
+        # Re-fetch with eagerly loaded mappings so callers can access them
+        # outside the session context without hitting DetachedInstanceError.
         async with self.manager.get_session() as session:
-            statement = select(ProcessSnapshot).where(ProcessSnapshot.id == process_id)
-
+            statement = (
+                select(ProcessSnapshot)
+                .where(ProcessSnapshot.id == process_id)
+                .options(selectinload(ProcessSnapshot.mappings))
+            )
             result = await session.execute(statement)  # type: ignore
             process = result.scalars().first()
 
+        await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
         return process
 
     async def address_to_binary(self, pid: int, addr: int) -> tuple[str, int] | None:
@@ -501,7 +515,13 @@ class ProcessDatabase:
                 "corruption_risk": corruption_risk,
             }
 
-    async def load_core_dump(self, core_path: str) -> ProcessSnapshot:
+    async def load_core_dump(
+        self,
+        core_path: str,
+        rootfs: str = "/",
+        debugfs: str | None = None,
+        tag: str | None = None,
+    ) -> ProcessSnapshot:
         """
         Load process state from ELF core dump file (Phase 2.2).
 
@@ -561,6 +581,7 @@ class ProcessDatabase:
                 description=f"Core dump from {core_path}",
                 source_type="core_dump",
                 source_path=core_path,
+                tag=tag,
             )
 
             # Create memory mappings from core dump segments (continue on error)
@@ -590,7 +611,7 @@ class ProcessDatabase:
 
             session.add(process)
             await session.commit()
-            await session.refresh(process)
+            process_id = process.id
 
             logger.info(
                 "core_dump_loaded",
@@ -601,7 +622,101 @@ class ProcessDatabase:
                     "pid": process.pid,
                 },
             )
-            return process
+
+        # Re-fetch with eagerly loaded mappings
+        async with self.manager.get_session() as session:
+            statement = (
+                select(ProcessSnapshot)
+                .where(ProcessSnapshot.id == process_id)
+                .options(selectinload(ProcessSnapshot.mappings))
+            )
+            result = await session.execute(statement)  # type: ignore
+            process = result.scalars().first()
+
+        await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
+        return process
+
+    async def _link_binaries(
+        self,
+        process: ProcessSnapshot,
+        rootfs: str = "/",
+        debugfs: str | None = None,
+    ) -> None:
+        """
+        Load binary metadata for each mapped file and create ProcessBinary links.
+
+        For each MemoryMapping with a real binary path:
+        1. Load binary into the unified DB via RootfsDatabase.load_binary()
+           (skipped if binary not present on current filesystem)
+        2. Create ProcessBinary linking snapshot → binary → mapping
+
+        Each unique binary path is loaded only once even if mapped multiple times
+        (e.g., libc appears 4+ times with different permissions).
+        """
+        from blackadder.db.rootfs import RootfsDatabase
+
+        rootfs_db = RootfsDatabase(self.manager, self.config)
+
+        # Deduplicate: load each unique binary path once
+        binary_cache: dict[str, Binary | None] = {}
+        for mapping in process.mappings:
+            pathname = mapping.pathname
+            if not pathname or pathname.startswith("["):
+                continue
+            if pathname in binary_cache:
+                continue
+            if not Path(pathname).is_file():
+                logger.debug("binary_not_found_on_fs", extra={"path": pathname})
+                binary_cache[pathname] = None
+                continue
+            try:
+                binary, is_new, debug_file = await rootfs_db.load_binary(pathname, rootfs=rootfs, debugfs=debugfs)
+                binary_cache[pathname] = binary
+                logger.debug(
+                    "binary_linked",
+                    extra={"path": pathname, "binary_id": binary.id, "is_new": is_new, "debug_file": debug_file},
+                )
+            except Exception as e:
+                logger.warning("binary_load_failed", extra={"path": pathname, "error": str(e)})
+                binary_cache[pathname] = None
+
+        # Create ProcessBinary records (one per mapping, skipping already-linked)
+        async with self.manager.get_session() as session:
+            for mapping in process.mappings:
+                pathname = mapping.pathname
+                if not pathname or pathname.startswith("["):
+                    continue
+
+                # Skip if already linked
+                existing = await session.execute(
+                    select(ProcessBinary).where(ProcessBinary.mapping_id == mapping.id)
+                )
+                if existing.scalars().first():
+                    continue
+
+                binary = binary_cache.get(pathname)
+                pb = ProcessBinary(
+                    process_id=process.id,
+                    binary_id=binary.id if binary else None,
+                    mapping_id=mapping.id,
+                    binary_load_addr=mapping.start_addr,
+                    match_score=1.0 if binary else None,
+                    match_method="exact" if binary else None,
+                )
+                session.add(pb)
+
+            await session.commit()
+
+        logger.info(
+            "binaries_linked",
+            extra={
+                "process_id": process.id,
+                "total_mappings": len(process.mappings),
+                "unique_binaries": len(binary_cache),
+                "loaded": sum(1 for b in binary_cache.values() if b is not None),
+                "not_found": sum(1 for b in binary_cache.values() if b is None),
+            },
+        )
 
     async def identify_process_binaries_fuzzy(
         self,
@@ -769,7 +884,7 @@ class ProcessDatabase:
             r"^([0-9a-f]+)-([0-9a-f]+)\s+"
             r"([r\-][w\-][x\-][ps])\s+"
             r"([0-9a-f]+)\s+"
-            r"[0-9a-f]+:[0-9a-f]+\s+"
+            r"([0-9a-f]+:[0-9a-f]+)\s+"
             r"(\d+)\s+"
             r"(.*)$"
         )
@@ -804,7 +919,9 @@ class ProcessDatabase:
                 end_addr = to_signed_64bit(int(m.group(2), 16))
                 perms = m.group(3)
                 offset = int(m.group(4), 16)
-                pathname = m.group(6).strip() or "[anonymous]"
+                dev = m.group(5)
+                inode = int(m.group(6))
+                pathname = m.group(7).strip() or "[anonymous]"
 
                 # Validate parsed values (from file)
                 if start_addr >= end_addr:
@@ -825,6 +942,8 @@ class ProcessDatabase:
                         "end_addr": end_addr,
                         "perms": perms,
                         "offset": offset,
+                        "dev": dev,
+                        "inode": inode,
                         "pathname": pathname,
                     }
                 )

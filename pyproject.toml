@@ -19,6 +19,8 @@ dependencies = [
     "typer[all]>=0.9",
     "aiofiles>=23.2",
     "rich>=13.0",
+    "polars>=1.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]

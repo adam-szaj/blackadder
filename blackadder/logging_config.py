@@ -8,6 +8,32 @@ import logging
 import sys
 from pathlib import Path
 
+# Fields present on every LogRecord — never treat these as "extra"
+_STANDARD_LOG_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+    "message",      # added by Formatter.format() itself
+    "asctime",      # added by Formatter.formatTime()
+    "taskName",     # added in Python 3.12+
+}
+
+
+class _ExtraFormatter(logging.Formatter):
+    """Formatter that appends key=value pairs from logger.debug(..., extra={...})."""
+
+    def __init__(self, fmt: str, datefmt: str | None = None):
+        super().__init__(fmt, datefmt=datefmt)
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = {
+            k: v
+            for k, v in record.__dict__.items()
+            if k not in _STANDARD_LOG_FIELDS and not k.startswith("_")
+        }
+        if extras:
+            pairs = " ".join(f"{k}={v!r}" for k, v in extras.items())
+            return f"{base}  {pairs}"
+        return base
+
 
 def setup_logging(log_level: str = "INFO", log_file: str | None = None) -> logging.Logger:
     """
@@ -28,12 +54,12 @@ def setup_logging(log_level: str = "INFO", log_file: str | None = None) -> loggi
     logger.handlers.clear()
 
     # Create formatters
-    detailed_formatter = logging.Formatter(
+    detailed_formatter = _ExtraFormatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    simple_formatter = logging.Formatter("%(levelname)s: %(message)s")
+    simple_formatter = _ExtraFormatter("%(levelname)s: %(message)s")
 
     # Console handler (always stderr, always simple format)
     console_handler = logging.StreamHandler(sys.stderr)

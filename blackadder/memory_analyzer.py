@@ -72,17 +72,10 @@ class MemoryAnalyzer:
         Raises:
             ValidationError: If address range is invalid
         """
-        # Input validation (Phase 2 hardening)
-        if start_addr < 0 or end_addr < 0:
-            logger.warning(
-                "negative_address_in_region",
-                extra={
-                    "start_addr": start_addr,
-                    "end_addr": end_addr,
-                },
-            )
-            raise ValidationError("Negative addresses not allowed")
-
+        # Input validation
+        # Note: kernel-space addresses (e.g. vsyscall at 0xffffffffff600000) are
+        # stored as signed 64-bit negatives in SQLite; size arithmetic is still
+        # correct, so only reject genuinely invalid ranges.
         if start_addr >= end_addr:
             logger.warning(
                 "invalid_address_range_in_region",
@@ -292,16 +285,7 @@ class MemoryAnalyzer:
             ValidationError: If inputs are invalid
         """
         # Input validation
-        if start_addr < 0 or end_addr < 0:
-            logger.warning(
-                "negative_addresses_in_analysis",
-                extra={
-                    "start_addr": start_addr,
-                    "end_addr": end_addr,
-                },
-            )
-            raise ValidationError("Negative addresses not allowed")
-
+        # Kernel-space addresses stored as signed negatives in SQLite are valid.
         if start_addr >= end_addr:
             logger.warning(
                 "invalid_address_range_in_analysis",

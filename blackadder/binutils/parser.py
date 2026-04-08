@@ -107,7 +107,7 @@ class BinToolsParser:
                 if not line:
                     break
 
-                decoded = line.decode().strip()
+                decoded = line.decode("utf-8", errors="replace").strip()
                 lines.append(decoded)
 
                 if on_line:
@@ -193,6 +193,72 @@ class BinToolsParser:
         sections = await asyncio.to_thread(parse_sections, lines)
         return sections
 
+    async def parse_objdump_syms_full(self, binary_path: str) -> list[dict]:
+        """
+        Parse objdump symbol output with all symbol fields.
+
+        Tries --syms first (static symbol table). If that yields nothing (stripped
+        binary), falls back to --dynamic-syms (.dynsym — exported symbols of shared
+        libraries). Both sets are merged when both produce results.
+
+        Args:
+            binary_path: Path to ELF binary
+
+        Returns:
+            List of dicts with keys: address, scope, sym_type, section, size, name
+        """
+        static_lines, dynamic_lines = await asyncio.gather(
+            self.run_command_limited([self.config.objdump_path, "--syms", binary_path]),
+            self.run_command_limited([self.config.objdump_path, "--dynamic-syms", binary_path]),
+        )
+
+        def parse_all(all_lines: list[str]) -> list[dict]:
+            result = []
+            for line in all_lines:
+                m = self.symbol_regex.match(line)
+                if m:
+                    result.append(
+                        {
+                            "address": int(m.group(1), 16),
+                            "scope": (m.group(2).strip() or "l")[0],
+                            "sym_type": (m.group(3).strip() or " ")[0],
+                            "section": m.group(4)[:32],
+                            "size": int(m.group(5), 16),
+                            "name": m.group(6)[:256],
+                        }
+                    )
+            return result
+
+        # --dynamic-syms has extra version/binding column before the name;
+        # the name is always the last whitespace-separated token on the line.
+        def parse_dynamic(all_lines: list[str]) -> list[dict]:
+            result = []
+            for line in all_lines:
+                m = self.symbol_regex.match(line)
+                if not m:
+                    continue
+                tokens = line.split()
+                name = tokens[-1][:256] if tokens else m.group(6)[:256]
+                result.append(
+                    {
+                        "address": int(m.group(1), 16),
+                        "scope": (m.group(2).strip() or "g")[0],
+                        "sym_type": (m.group(3).strip() or " ")[0],
+                        "section": m.group(4)[:32],
+                        "size": int(m.group(5), 16),
+                        "name": name,
+                    }
+                )
+            return result
+
+        static = await asyncio.to_thread(parse_all, static_lines)
+        dynamic = await asyncio.to_thread(parse_dynamic, dynamic_lines)
+
+        # Merge: deduplicate by (address, name); static takes priority
+        seen: set[tuple[int, str]] = {(s["address"], s["name"]) for s in static}
+        merged = static + [d for d in dynamic if (d["address"], d["name"]) not in seen]
+        return merged
+
     async def parse_readelf_debug_link(self, binary_path: str) -> str | None:
         """
         Extract .gnu_debuglink section using readelf.
@@ -207,13 +273,15 @@ class BinToolsParser:
             [self.config.readelf_path, "--string-dump=.gnu_debuglink", binary_path]
         )
 
-        # Look for line like: [    0]  ./libfoo.so.1.debug
-        debug_link_regex = re.compile(r"^\s+\[.*\]\s+(\S+)\s*$")
-
+        # Lines come pre-stripped by run_command_limited; look for: [    0]  libfoo.so.debug
+        # Mirrors the bash: sed -n '/]/{s/.* //;p;q}'
+        # Take the last token from the first line that contains ']'
         for line in lines:
-            m = debug_link_regex.match(line)
-            if m:
-                return m.group(1)
+            if "]" in line:
+                token = line.rsplit(None, 1)[-1]
+                if token.isprintable():
+                    return token
+                break  # First ']' line is always the name; stop here
 
         return None
 

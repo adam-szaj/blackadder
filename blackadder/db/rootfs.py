@@ -5,12 +5,19 @@ Provides RootfsDatabase class for managing binaries, sections, symbols,
 and function fingerprints extracted from binaries in the rootfs.
 """
 
+import asyncio
+import hashlib
+import logging
+import os
+
 from sqlmodel import select
 
 from blackadder.binutils.hasher import FunctionHasher
-from blackadder.models import Binary, FunctionFingerprint
+from blackadder.models import Binary, BinaryLocator, FunctionFingerprint, SectionHeader, Symbol
 
 from .base import AsyncDatabaseManager
+
+logger = logging.getLogger("blackadder.db.rootfs")
 
 
 class RootfsDatabase:
@@ -27,6 +34,207 @@ class RootfsDatabase:
         self.manager = manager
         self.config = config
 
+    async def load_binary(
+        self,
+        binary_path: str,
+        rootfs: str = "/",
+        debugfs: str | None = None,
+    ) -> tuple[Binary, bool, str | None]:
+        """
+        Load a binary into the rootfs database.
+
+        Computes MD5, extracts sections/symbols/debug_link via objdump/readelf,
+        and stores them. Returns existing record without re-parsing if MD5 matches.
+        Also searches for and loads a companion debug file if one is found.
+
+        Args:
+            binary_path: Absolute path to the binary file
+            rootfs:      Path to rootfs (used for debug-file search)
+            debugfs:     Path to debugfs (defaults to rootfs)
+
+        Returns:
+            (Binary, is_new, debug_file_path) — debug_file_path is None if no
+            debug file was found, or the resolved path when found.
+        """
+        from blackadder.binutils.parser import BinToolsParser
+
+        def _compute_md5() -> str:
+            md5 = hashlib.md5()
+            with open(binary_path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    md5.update(chunk)
+            return md5.hexdigest()
+
+        md5sum = await asyncio.to_thread(_compute_md5)
+        name = os.path.basename(binary_path)
+        mtime = int(os.path.getmtime(binary_path))
+
+        parser = BinToolsParser(self.config)
+        from blackadder.binutils.debuginfo import find_debug_file
+
+        # Resolve debug file path (needed for both new and existing binaries)
+        try:
+            debug_link_name = await parser.parse_readelf_debug_link(binary_path)
+        except Exception as e:
+            logger.debug("debug_link_parse_failed", extra={"path": binary_path, "error": str(e)})
+            debug_link_name = None
+
+        debug_file_path = await asyncio.to_thread(
+            find_debug_file, binary_path, debug_link_name, rootfs, debugfs
+        )
+        sym_source = debug_file_path or binary_path
+
+        async with self.manager.get_session() as session:
+            # Check if binary already known by MD5
+            stmt = select(Binary).where(Binary.md5sum == md5sum)
+            result = await session.execute(stmt)
+            existing = result.scalars().first()
+
+            if existing:
+                # Register this path if not yet known
+                loc_stmt = select(BinaryLocator).where(BinaryLocator.path == binary_path)
+                loc_result = await session.execute(loc_stmt)
+                if not loc_result.scalars().first():
+                    session.add(BinaryLocator(path=binary_path, md5sum=md5sum, mtime=mtime))
+                    await session.commit()
+
+                sym_check = await session.execute(
+                    select(Symbol).where(Symbol.binary_id == existing.id).limit(1)
+                )
+                has_symbols = sym_check.scalars().first() is not None
+
+                # Skip reload only if symbols exist AND we have no better source
+                if has_symbols and sym_source == binary_path:
+                    return existing, False, debug_file_path
+
+                # Symbols missing OR debug file now available — DELETE + INSERT
+                if has_symbols:
+                    await session.execute(
+                        Symbol.__table__.delete().where(Symbol.binary_id == existing.id)
+                    )
+                    logger.debug(
+                        "symbols_replacing_with_debug_file",
+                        extra={"binary": binary_path, "sym_source": sym_source},
+                    )
+                else:
+                    logger.debug(
+                        "symbols_missing_loading",
+                        extra={"binary": binary_path, "sym_source": sym_source},
+                    )
+                binary_id = existing.id
+            else:
+                # New binary — parse and store everything
+                debug_link = debug_file_path  # only store when actually resolved
+                binary = Binary(md5sum=md5sum, name=name, debug_link=debug_link)
+                session.add(binary)
+                await session.flush()
+                binary_id = binary.id
+
+                # Sections
+                try:
+                    sections_data = await parser.parse_objdump_sections(binary_path)
+                    for idx, (sec_name, sec) in enumerate(sections_data.items()):
+                        session.add(
+                            SectionHeader(
+                                binary_id=binary_id,
+                                idx=idx,
+                                name=sec_name[:32],
+                                size=sec["size"],
+                                vma=sec["vma"],
+                                lma=sec["lma"],
+                                off=sec["off"],
+                                align=sec["align"],
+                            )
+                        )
+                except Exception as e:
+                    logger.debug("sections_parse_failed", extra={"path": binary_path, "error": str(e)})
+
+                session.add(BinaryLocator(path=binary_path, md5sum=md5sum, mtime=mtime))
+
+            # Load symbols — shared path for both new and existing-without-symbols
+            try:
+                syms_data = await parser.parse_objdump_syms_full(sym_source)
+                if not syms_data and sym_source != binary_path:
+                    syms_data = await parser.parse_objdump_syms_full(binary_path)
+                for sym in syms_data:
+                    session.add(
+                        Symbol(
+                            binary_id=binary_id,
+                            address=sym["address"],
+                            scope=sym["scope"],
+                            sym_type=sym["sym_type"],
+                            section=sym["section"],
+                            size=sym["size"],
+                            name=sym["name"],
+                        )
+                    )
+                logger.debug(
+                    "symbols_loaded",
+                    extra={"binary": binary_path, "source": sym_source, "count": len(syms_data)},
+                )
+            except Exception as e:
+                logger.debug("symbols_parse_failed", extra={"path": sym_source, "error": str(e)})
+
+            await session.commit()
+
+        # Re-fetch outside the session to avoid detached state
+        async with self.manager.get_session() as session:
+            result = await session.execute(select(Binary).where(Binary.id == binary_id))
+            binary = result.scalars().first()
+
+        if binary is None:
+            raise RuntimeError(f"Binary disappeared after insert: id={binary_id}")
+
+        return binary, True, debug_file_path
+
+    async def find_symbol_at_offset(self, binary_path: str, offset: int) -> dict | None:
+        """
+        Find the nearest symbol at or before offset in a binary.
+
+        Used by the syms command for --type and --section display flags.
+        Requires the binary to have been loaded via load_binary() first.
+
+        Args:
+            binary_path: Path to the binary
+            offset: Address/offset within the binary
+
+        Returns:
+            Dict with name, scope, sym_type, section, size, address; or None
+        """
+        async with self.manager.get_session() as session:
+            loc_result = await session.execute(
+                select(BinaryLocator).where(BinaryLocator.path == binary_path)
+            )
+            locator = loc_result.scalars().first()
+            if not locator:
+                return None
+
+            bin_result = await session.execute(
+                select(Binary).where(Binary.md5sum == locator.md5sum)
+            )
+            binary = bin_result.scalars().first()
+            if not binary:
+                return None
+
+            sym_result = await session.execute(
+                select(Symbol)
+                .where(Symbol.binary_id == binary.id, Symbol.address <= offset)
+                .order_by(Symbol.address.desc())
+                .limit(1)
+            )
+            symbol = sym_result.scalars().first()
+            if not symbol:
+                return None
+
+            return {
+                "name": symbol.name,
+                "scope": symbol.scope,
+                "sym_type": symbol.sym_type,
+                "section": symbol.section,
+                "size": symbol.size,
+                "address": symbol.address,
+            }
+
     async def compute_and_cache_fingerprints(self, binary_id: int, binary_path: str) -> int:
         """
         Compute fingerprints for a binary and store in DB.
@@ -38,7 +246,6 @@ class RootfsDatabase:
         Returns:
             Count of fingerprints stored
         """
-        # Compute fingerprints
         hasher = FunctionHasher(self.config)
         fp_result = await hasher.compute_fingerprints(binary_path)
 
@@ -47,44 +254,34 @@ class RootfsDatabase:
 
         fingerprints = fp_result.fingerprints
 
-        # Store in database
         async with self.manager.get_session() as session:
-            # Create new fingerprint records
-            # (We don't delete old ones - just add new ones)
-            # This allows incremental updates and avoids the need for delete
             for func_name, content_hash in fingerprints.items():
                 fp = FunctionFingerprint(
                     binary_id=binary_id,
                     func_name=func_name,
-                    func_offset=0,  # Not computed by hasher yet
-                    func_size=0,  # Not computed by hasher yet
+                    func_offset=0,
+                    func_size=0,
                     content_hash=content_hash,
                 )
                 session.add(fp)
 
             await session.commit()
 
-            count = len(fingerprints)
-
-        return count
+        return len(fingerprints)
 
     async def find_binaries_by_name(self, name: str) -> list[Binary]:
         """
         Find all binaries matching a name (e.g., 'libc.so.6').
 
         Args:
-            name: Binary name or pattern
+            name: Binary name
 
         Returns:
             List of matching Binary objects
         """
         async with self.manager.get_session() as session:
-            # Exact match on name
-            statement = select(Binary).where(Binary.name == name)
-            result = await session.exec(statement)  # type: ignore
-            binaries = result.all()
-
-        return binaries
+            result = await session.execute(select(Binary).where(Binary.name == name))
+            return list(result.scalars().all())
 
     async def find_binary_by_md5(self, md5sum: str) -> Binary | None:
         """
@@ -97,11 +294,8 @@ class RootfsDatabase:
             Binary object or None if not found
         """
         async with self.manager.get_session() as session:
-            statement = select(Binary).where(Binary.md5sum == md5sum)
-            result = await session.exec(statement)  # type: ignore
-            binary = result.first()
-
-        return binary
+            result = await session.execute(select(Binary).where(Binary.md5sum == md5sum))
+            return result.scalars().first()
 
     async def has_fingerprints(self, binary_id: int) -> bool:
         """
@@ -114,10 +308,7 @@ class RootfsDatabase:
             True if fingerprints exist
         """
         async with self.manager.get_session() as session:
-            statement = select(FunctionFingerprint).where(
-                FunctionFingerprint.binary_id == binary_id
+            result = await session.execute(
+                select(FunctionFingerprint).where(FunctionFingerprint.binary_id == binary_id)
             )
-            result = await session.exec(statement)  # type: ignore
-            fp = result.first()
-
-        return fp is not None
+            return result.scalars().first() is not None

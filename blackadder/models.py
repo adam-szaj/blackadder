@@ -152,6 +152,7 @@ class ProcessSnapshot(SQLModel, table=True):
     pid: int | None = None  # None for offline/core dump analysis
     created_at: datetime = Field(default_factory=datetime.now)
     description: str = ""  # e.g., "core dump from crash at 2026-04-06 14:30:00"
+    tag: str | None = Field(default=None, index=True)  # Human-readable label
 
     # Phase 2.2: Core dump parsing support
     source_type: str = Field(default="maps")  # "maps", "core_dump", "gdb_live"
@@ -176,6 +177,8 @@ class MemoryMapping(SQLModel, table=True):
     end_addr: int = Field(index=True)
     perms: str = Field(max_length=4)  # "r-xp", "rw-p", etc.
     offset: int  # File offset into binary
+    dev: str | None = Field(default=None, max_length=16)  # Device "fc:01"
+    inode: int | None = None  # Inode number (0 for anonymous)
     pathname: str = Field(index=True, max_length=256)  # Path or "[heap]", "[stack]", etc.
 
     # Relationships

@@ -2,12 +2,15 @@
 Baldrick CLI - main entry point for blackadder debugging tool.
 
 Provides commands for:
+- Loading binaries into rootfs database
 - Loading process memory mappings
 - Decoding backtraces
 - Resolving addresses to symbols
-- Querying memory information
+- Analyzing memory layout
 """
 
+import glob as glob_module
+import re
 import sys
 from pathlib import Path
 
@@ -18,11 +21,35 @@ from rich.table import Table
 from blackadder.binutils import init_parser, parse_backtrace_auto
 from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
+from blackadder.db.rootfs import RootfsDatabase
+from blackadder.logging_config import setup_logging
 
 app = typer.Typer(
     help="Baldrick - Linux debugging tool for backtrace decoding and symbol resolution"
 )
 console = Console()
+
+# Module-level storage for global --db option set in callback
+_global_db: str | None = None
+
+
+@app.callback()
+def _global_options(
+    debug: bool = typer.Option(False, "--debug", help="Enable DEBUG level logging"),
+    log_level: str = typer.Option("WARNING", "--log-level", help="Log level (DEBUG, INFO, WARNING, ERROR)"),
+    log_file: str | None = typer.Option(None, "--log-file", help="Write logs to file"),
+    db: str | None = typer.Option(None, "--db", "-d", help="Path to database (overrides config default)"),
+) -> None:
+    """Global options applied to all commands."""
+    global _global_db
+    _global_db = db
+    level = "DEBUG" if debug else log_level.upper()
+    setup_logging(level, log_file)
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
 
 
 def _get_config_or_default() -> BlackadderConfig:
@@ -34,78 +61,399 @@ def _get_config_or_default() -> BlackadderConfig:
         return BlackadderConfig()
 
 
+def _to_db_url(path_or_url: str) -> str:
+    """Convert a file path or existing SQLAlchemy URL to an aiosqlite URL."""
+    if path_or_url.startswith("sqlite+aiosqlite://"):
+        return path_or_url
+    return f"sqlite+aiosqlite:///{Path(path_or_url).resolve()}"
+
+
+def _db_manager(db: str | None, config: BlackadderConfig) -> AsyncDatabaseManager:
+    return AsyncDatabaseManager(_to_db_url(db or config.db))
+
+
+def _parse_perm(perm_str: str) -> tuple[int, int]:
+    """
+    Parse a Unix permission string to a (mask, value) pair.
+
+    Supports octal (0755, 755) and symbolic forms (u+x, +x, a+x).
+    Returns (mask, value) such that file_mode & mask == value.
+    """
+    if re.match(r"^0?[0-7]{3}$", perm_str):
+        val = int(perm_str, 8)
+        return (0o777, val)
+    m = re.match(r"^([ugoa]?)\+([rwx]+)$", perm_str)
+    if m:
+        who, what = m.group(1), m.group(2)
+        x_bits = {"u": 0o100, "g": 0o010, "o": 0o001, "a": 0o111, "": 0o001}
+        w_bits = {"u": 0o200, "g": 0o020, "o": 0o002, "a": 0o222, "": 0o002}
+        r_bits = {"u": 0o400, "g": 0o040, "o": 0o004, "a": 0o444, "": 0o004}
+        mask = value = 0
+        if "x" in what:
+            mask |= x_bits[who]
+            value |= x_bits[who]
+        if "w" in what:
+            mask |= w_bits[who]
+            value |= w_bits[who]
+        if "r" in what:
+            mask |= r_bits[who]
+            value |= r_bits[who]
+        return (mask, value)
+    raise ValueError(f"Cannot parse permission string: {perm_str!r}")
+
+
+def _collect_paths_from_maps_text(maps_text: str, rootfs: str) -> list[str]:
+    """Extract unique binary paths from /proc/maps text, resolved against rootfs."""
+    rootfs_base = rootfs.rstrip("/") or "/"
+    paths: set[str] = set()
+    for line in maps_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 6:
+            pathname = parts[-1].strip()
+            if pathname and not pathname.startswith("["):
+                full = str(Path(rootfs_base) / pathname.lstrip("/"))
+                if Path(full).is_file():
+                    paths.add(full)
+    return sorted(paths)
+
+
+def _collect_binary_paths(
+    rootfs: str,
+    glob_pattern: str | None = None,
+    perm: str | None = None,
+    files_spec: str | None = None,
+    maps_file: str | None = None,
+    pid: int | None = None,
+    core_file: str | None = None,
+) -> list[str]:
+    """
+    Collect binary file paths from the given source.
+
+    Returns a sorted, deduplicated list of absolute paths to binary files.
+    """
+    paths: set[str] = set()
+
+    rootfs_base = rootfs.rstrip("/") or "/"
+
+    if glob_pattern:
+        full_pattern = str(Path(rootfs_base) / glob_pattern.lstrip("/"))
+        for match in glob_module.glob(full_pattern, recursive=True):
+            if Path(match).is_file():
+                paths.add(match)
+
+    if perm:
+        mask, value = _parse_perm(perm)
+        for p in Path(rootfs_base).rglob("*"):
+            if p.is_file():
+                try:
+                    if p.stat().st_mode & mask == value:
+                        paths.add(str(p))
+                except PermissionError:
+                    pass
+
+    if files_spec:
+        if files_spec.startswith("@"):
+            with open(files_spec[1:]) as f:
+                raw_paths = [line.strip() for line in f if line.strip()]
+        else:
+            raw_paths = [p for p in files_spec.split(":") if p]
+        for p in raw_paths:
+            full = str(Path(rootfs_base) / p.lstrip("/"))
+            if Path(full).is_file():
+                paths.add(full)
+            elif Path(p).is_file():
+                paths.add(p)
+
+    if maps_file:
+        with open(maps_file) as f:
+            maps_text = f.read()
+        paths.update(_collect_paths_from_maps_text(maps_text, rootfs))
+
+    if pid:
+        proc_maps = f"/proc/{pid}/maps"
+        try:
+            with open(proc_maps) as f:
+                maps_text = f.read()
+            paths.update(_collect_paths_from_maps_text(maps_text, rootfs))
+        except PermissionError:
+            console.print(f"[yellow]Warning: Cannot read {proc_maps} (permission denied)[/yellow]")
+        except FileNotFoundError:
+            console.print(f"[yellow]Warning: {proc_maps} not found - process {pid} may not exist[/yellow]")
+
+    if core_file:
+        # Parse coredump and extract binary pathnames from PT_LOAD mappings
+        # (CoreDumpParser result may have empty pathnames for anonymous segments)
+        import asyncio
+        from blackadder.binutils.coredump import CoreDumpParser
+        config = _get_config_or_default()
+        parser = CoreDumpParser(config)
+
+        async def _get_core_paths():
+            result = await parser.parse_core_dump(core_file)
+            found = []
+            if result.status == "success":
+                for m in result.mappings:
+                    pathname = m.get("pathname", "")
+                    if pathname and not pathname.startswith("["):
+                        full = str(Path(rootfs.rstrip("/")) / pathname.lstrip("/"))
+                        if Path(full).is_file():
+                            found.append(full)
+            return found
+
+        core_paths = asyncio.run(_get_core_paths())
+        paths.update(core_paths)
+
+    return sorted(paths)
+
+
+# ============================================================================
+# Commands
+# ============================================================================
+
+
 @app.command()
-async def load_process(
-    maps_file: str = typer.Option(..., "--maps", "-m", help="Path to /proc/PID/maps file"),
-    pid: int | None = typer.Option(None, "--pid", "-p", help="Process ID"),
-    db: str | None = typer.Option(
-        None, "--db", "-d", help="Path to process database (default: blackadder-process.db)"
+async def load(
+    rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
+    debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
+    glob_pattern: str | None = typer.Option(
+        None, "--glob", "-g", help="Glob pattern to match binaries (e.g. **/*.so)"
+    ),
+    perm: str | None = typer.Option(
+        None, "--perm", "-P", help="File permission filter (e.g. 0755, u+x)"
+    ),
+    files_spec: str | None = typer.Option(
+        None,
+        "--files",
+        "-f",
+        help="File list: colon-separated paths or @file with one path per line",
+    ),
+    maps_file: str | None = typer.Option(
+        None, "--maps", "-m", help="Path to /proc/PID/maps file"
+    ),
+    pid: int | None = typer.Option(
+        None, "--pid", "-p", help="Running process PID (reads /proc/PID/maps)"
+    ),
+    core_file: str | None = typer.Option(
+        None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
 ) -> None:
     """
-    Load process memory mapping from /proc/PID/maps.
+    Load binaries from rootfs into the rootfs database.
 
-    Creates a ProcessSnapshot with all memory mappings in the database.
+    Extracts sections, symbols, and debug info via objdump/readelf.
+    Skips binaries already cached (identified by MD5).
+
+    Example:
+        baldrick load --rootfs /target --glob '**/*.so'
+        baldrick load --rootfs /target --perm u+x
+        baldrick load --rootfs /target --maps /proc/12345/maps
+        baldrick load --rootfs /target --pid 12345
+    """
+    sources = [glob_pattern, perm, files_spec, maps_file, pid, core_file]
+    if not any(s is not None for s in sources):
+        console.print("[red]Error: Specify at least one source: --glob, --perm, --files, --maps, --pid, or --coredump[/red]")
+        raise typer.Exit(1)
+
+    config = _get_config_or_default()
+
+    try:
+        console.print("[blue]Collecting binary paths...[/blue]")
+        binary_paths = _collect_binary_paths(
+            rootfs=rootfs,
+            glob_pattern=glob_pattern,
+            perm=perm,
+            files_spec=files_spec,
+            maps_file=maps_file,
+            pid=pid,
+            core_file=core_file,
+        )
+
+        if not binary_paths:
+            console.print("[yellow]No binary files found matching the given criteria.[/yellow]")
+            raise typer.Exit(0)
+
+        console.print(f"[green]Found {len(binary_paths)} binary file(s)[/green]")
+
+        manager = _db_manager(_global_db, config)
+        await manager.create_all()
+        rootfs_db_obj = RootfsDatabase(manager, config)
+
+        loaded = skipped = failed = 0
+        for path in binary_paths:
+            try:
+                _, is_new, debug_file = await rootfs_db_obj.load_binary(path, rootfs=rootfs, debugfs=debugfs or rootfs)
+                if is_new:
+                    loaded += 1
+                    if debug_file:
+                        console.print(f"  [dim]debug: {debug_file}[/dim]")
+                else:
+                    skipped += 1
+            except Exception as e:
+                failed += 1
+                console.print(f"[yellow]  Skip {path}: {e}[/yellow]")
+
+        console.print(
+            f"\n[green]✓ Done: {loaded} loaded, {skipped} already cached, {failed} failed[/green]"
+        )
+        await manager.close()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+async def load_process(
+    maps_file: str | None = typer.Option(
+        None, "--maps", "-m", help="Path to /proc/PID/maps file"
+    ),
+    pid: int | None = typer.Option(None, "--pid", "-p", help="Running process PID"),
+    core_file: str | None = typer.Option(
+        None, "--coredump", "-C", help="Path to ELF core dump file"
+    ),
+    rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
+    debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
+    tag: str | None = typer.Option(None, "--tag", "-T", help="Human-readable label for this snapshot"),
+) -> None:
+    """
+    Load process memory mappings into the database.
+
+    Accepts /proc/maps, a live PID, or an ELF core dump as input.
+    Also extracts and stores binary metadata (sections, symbols) for all mapped files.
 
     Example:
         baldrick load-process --maps /proc/12345/maps --pid 12345
-        baldrick load-process --maps core_dump_maps.txt
+        baldrick load-process --pid 12345
+        baldrick load-process --coredump core.dump
     """
+    sources = [maps_file, pid, core_file]
+    if not any(s is not None for s in sources):
+        console.print("[red]Error: Specify --maps, --pid, or --coredump[/red]")
+        raise typer.Exit(1)
+
     config = _get_config_or_default()
-    db_path = db or config.process_db
 
     try:
-        # Read maps file
-        maps_path = Path(maps_file)
-        if not maps_path.exists():
-            console.print(f"[red]Error: maps file not found: {maps_file}[/red]")
-            raise typer.Exit(1)
+        proc_manager = _db_manager(_global_db, config)
+        await proc_manager.create_all()
+        db_proc = ProcessDatabase(proc_manager, config)
 
-        with open(maps_path) as f:
-            maps_text = f.read()
+        if core_file:
+            core_path = Path(core_file)
+            if not core_path.exists():
+                console.print(f"[red]Error: core dump file not found: {core_file}[/red]")
+                raise typer.Exit(1)
 
-        # Create database and load maps
-        manager = AsyncDatabaseManager(db_path)
-        db_proc = ProcessDatabase(manager, config)
+            console.print(f"[blue]Parsing core dump from {core_file}...[/blue]")
+            process = await db_proc.load_core_dump(str(core_path), rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag)
 
-        console.print(f"[blue]Loading memory mappings from {maps_file}...[/blue]")
+        else:
+            if pid and not maps_file:
+                proc_maps_path = f"/proc/{pid}/maps"
+                try:
+                    with open(proc_maps_path) as f:
+                        maps_text = f.read()
+                except (FileNotFoundError, PermissionError) as e:
+                    console.print(f"[red]Error: Cannot read {proc_maps_path}: {e}[/red]")
+                    raise typer.Exit(1)
+            elif maps_file:
+                maps_path = Path(maps_file)
+                if not maps_path.exists():
+                    console.print(f"[red]Error: maps file not found: {maps_file}[/red]")
+                    raise typer.Exit(1)
+                with open(maps_path) as f:
+                    maps_text = f.read()
+            else:
+                console.print("[red]Error: Specify --maps, --pid, or --coredump[/red]")
+                raise typer.Exit(1)
 
-        process = await db_proc.load_maps(pid, maps_text)
+            console.print(f"[blue]Loading memory mappings...[/blue]")
+            process = await db_proc.load_maps(pid, maps_text, rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag)
 
         console.print(
             f"[green]✓ Loaded process snapshot ID {process.id} "
             f"with {len(process.mappings)} memory mappings[/green]"
         )
 
-        # Show summary
-        table = Table(title="Memory Mappings Summary")
-        table.add_column("Start Address", style="cyan")
-        table.add_column("End Address", style="cyan")
-        table.add_column("Permissions", style="magenta")
+        # Build section lookup: pathname -> list of (off, off+size, name)
+        from blackadder.models import BinaryLocator, Binary, SectionHeader
+        from sqlmodel import select as sql_select
+
+        section_map: dict[str, list[tuple[int, int, str]]] = {}
+        debug_file_map: dict[str, str] = {}  # pathname -> debug_link path
+        unique_paths = {m.pathname for m in process.mappings if m.pathname and not m.pathname.startswith("[")}
+        async with proc_manager.get_session() as session:
+            for path in unique_paths:
+                loc = (await session.execute(
+                    sql_select(BinaryLocator).where(BinaryLocator.path == path)
+                )).scalars().first()
+                if not loc:
+                    continue
+                binary = (await session.execute(
+                    sql_select(Binary).where(Binary.md5sum == loc.md5sum)
+                )).scalars().first()
+                if not binary:
+                    continue
+                if binary.debug_link:
+                    debug_file_map[path] = binary.debug_link
+                sections = (await session.execute(
+                    sql_select(SectionHeader).where(SectionHeader.binary_id == binary.id)
+                )).scalars().all()
+                section_map[path] = [(s.off, s.off + s.size, s.name) for s in sections if s.size > 0]
+
+        def find_section(pathname: str, file_offset: int) -> str:
+            for (start, end, name) in section_map.get(pathname, []):
+                if start <= file_offset < end:
+                    return name
+            return ""
+
+        table = Table(title="Memory Mappings")
+        table.add_column("Start", style="cyan", no_wrap=True)
+        table.add_column("Size", style="cyan", no_wrap=True)
+        table.add_column("Prm", style="magenta", no_wrap=True)
+        table.add_column("Offset", style="yellow", no_wrap=True)
+        table.add_column("Dev", style="dim", no_wrap=True)
+        table.add_column("Section", style="blue", no_wrap=True)
         table.add_column("Pathname", style="green")
 
-        for mapping in list(process.mappings)[:10]:  # Show first 10
+        for mapping in process.mappings:
+            size = mapping.end_addr - mapping.start_addr
+            # Size display: show in KB/MB for readability
+            if abs(size) >= 1024 * 1024:
+                size_str = f"{size // (1024*1024)}M"
+            elif abs(size) >= 1024:
+                size_str = f"{size // 1024}K"
+            else:
+                size_str = f"{size}B"
+
+            section = find_section(mapping.pathname, mapping.offset) if mapping.offset > 0 else ""
+
             table.add_row(
                 f"{mapping.start_addr:#x}",
-                f"{mapping.end_addr:#x}",
+                size_str,
                 mapping.perms,
-                mapping.pathname[:50],
-            )
-
-        if len(process.mappings) > 10:
-            table.add_row(
-                "[yellow]...[/yellow]",
-                "[yellow]...[/yellow]",
-                "[yellow]...[/yellow]",
-                f"[yellow]({len(process.mappings) - 10} more)[/yellow]",
+                f"{mapping.offset:#x}" if mapping.offset else "0",
+                mapping.dev or "",
+                section,
+                mapping.pathname,
             )
 
         console.print(table)
 
-        await manager.close()
+        if debug_file_map:
+            console.print()
+            dbg_table = Table(title="Debug Files Found", show_header=True)
+            dbg_table.add_column("Binary", style="green")
+            dbg_table.add_column("Debug File", style="cyan")
+            for bin_path in sorted(debug_file_map):
+                dbg_table.add_row(bin_path, debug_file_map[bin_path])
+            console.print(dbg_table)
+
+        await proc_manager.close()
 
     except typer.Exit:
-        # Re-raise Typer exits without wrapping
         raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -115,10 +463,11 @@ async def load_process(
 @app.command()
 async def decode_backtrace(
     trace_file: str | None = typer.Option(
-        None, "--trace", "-t", help="Backtrace file (or read from stdin)"
+        None, "--trace", "-t", help="Backtrace file (default: stdin)"
     ),
-    pid: int = typer.Option(..., "--pid", "-p", help="Process ID or snapshot ID"),
-    db: str | None = typer.Option(None, "--db", "-d", help="Path to process database"),
+    pid: int = typer.Option(..., "--pid", "-p", help="Process snapshot ID"),
+    rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
+    debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
     jobs: int = typer.Option(32, "--jobs", "-j", help="Max parallel symbol resolutions"),
 ) -> None:
     """
@@ -130,15 +479,13 @@ async def decode_backtrace(
     - Kernel format ([<ffffffff81000001>] function+0x42/0x100)
 
     Example:
-        baldrick decode-backtrace --pid 12345 --trace trace.txt
-        cat trace.txt | baldrick decode-backtrace --pid 12345
+        baldrick decode-backtrace --pid 1 --trace trace.txt
+        cat trace.txt | baldrick decode-backtrace --pid 1
     """
     config = _get_config_or_default()
-    db_path = db or config.process_db
     config.max_subprocess_workers = jobs
 
     try:
-        # Read backtrace
         if trace_file:
             trace_path = Path(trace_file)
             if not trace_path.exists():
@@ -147,7 +494,6 @@ async def decode_backtrace(
             with open(trace_path) as f:
                 trace_text = f.read()
         else:
-            # Read from stdin
             console.print("[blue]Reading backtrace from stdin...[/blue]")
             trace_text = sys.stdin.read()
 
@@ -155,7 +501,6 @@ async def decode_backtrace(
             console.print("[red]Error: No backtrace input[/red]")
             raise typer.Exit(1)
 
-        # Parse backtrace to addresses
         console.print("[blue]Parsing backtrace format...[/blue]")
         addresses = parse_backtrace_auto(trace_text)
 
@@ -165,18 +510,14 @@ async def decode_backtrace(
 
         console.print(f"[green]✓ Found {len(addresses)} addresses[/green]")
 
-        # Initialize parser
         init_parser(config)
 
-        # Decode backtrace
         console.print(f"[blue]Decoding backtrace with {jobs} parallel workers...[/blue]")
 
-        manager = AsyncDatabaseManager(db_path)
+        manager = _db_manager(_global_db, config)
         db_proc = ProcessDatabase(manager, config)
-
         frames = await db_proc.decode_backtrace(pid, addresses)
 
-        # Display results
         console.print()
         table = Table(title="Decoded Backtrace")
         table.add_column("#", style="cyan", width=3)
@@ -200,11 +541,9 @@ async def decode_backtrace(
 
         console.print(table)
         console.print(f"\n[green]✓ Decoded {len(frames)} frames[/green]")
-
         await manager.close()
 
     except typer.Exit:
-        # Re-raise Typer exits without wrapping
         raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -212,72 +551,147 @@ async def decode_backtrace(
 
 
 @app.command()
-async def syms(
-    pid: int = typer.Option(..., "--pid", "-p", help="Process ID"),
-    address: str | None = typer.Option(None, "--address", "-a", help="Address to resolve (hex)"),
-    db: str | None = typer.Option(None, "--db", "-d", help="Path to process database"),
+async def decode_address(
+    addresses: list[str] = typer.Argument(help="Addresses to resolve (hex)"),
+    rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
+    debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
+    mapped: bool = typer.Option(
+        False, "--mapped", "-a", help="Addresses are virtual (process address space)"
+    ),
+    unmapped: bool = typer.Option(
+        False, "--unmapped", "-A", help="Addresses are offsets within a binary file"
+    ),
+    pid: int | None = typer.Option(
+        None, "--pid", "-p", help="Process snapshot ID (for --mapped mode)"
+    ),
+    binary_file: str | None = typer.Option(
+        None, "--binary", "-b", help="Binary file path (for --unmapped mode)"
+    ),
+    show_name: bool = typer.Option(False, "--name", "-n", help="Print only symbol name"),
+    show_type: bool = typer.Option(False, "--type", "-t", help="Also show symbol type"),
+    show_section: bool = typer.Option(False, "--section", "-j", help="Also show section name"),
+    show_full: bool = typer.Option(False, "--full", "-F", help="Show all available fields"),
 ) -> None:
     """
-    Resolve an address to its symbol and memory mapping.
+    Resolve addresses to symbols and memory information.
 
-    Shows which binary is loaded at the address and the symbol name.
+    Two modes:
+      --mapped   [--pid N]    address is virtual (from process address space)
+      --unmapped --binary PATH address is an offset within the binary file
+
+    Multiple addresses can be passed as positional arguments.
 
     Example:
-        baldrick syms --pid 12345 --address 0x400a1c
+        baldrick decode-address --mapped --pid 1 -- 0x400a1c 0x400a2c
+        baldrick decode-address --unmapped --binary /lib/libc.so.6 -- 0x1c5c0
+        baldrick decode-address --mapped --pid 1 --full -- 0x400a1c
     """
+    if not addresses:
+        console.print("[red]Error: Provide at least one address[/red]")
+        raise typer.Exit(1)
+
+    # Infer mode from flags/params if not explicit
+    if not mapped and not unmapped:
+        if binary_file:
+            unmapped = True
+        else:
+            mapped = True  # default
+
+    if mapped and unmapped:
+        console.print("[red]Error: --mapped and --unmapped are mutually exclusive[/red]")
+        raise typer.Exit(1)
+
+    if mapped and pid is None:
+        console.print("[red]Error: --mapped requires --pid <snapshot-id>[/red]")
+        raise typer.Exit(1)
+
+    if unmapped and not binary_file:
+        console.print("[red]Error: --unmapped requires --binary <path>[/red]")
+        raise typer.Exit(1)
+
     config = _get_config_or_default()
-    db_path = db or config.process_db
+
+    # Parse addresses
+    parsed_addrs: list[int] = []
+    for raw in addresses:
+        try:
+            parsed_addrs.append(int(raw, 16))
+        except ValueError:
+            console.print(f"[red]Error: Invalid hex address: {raw!r}[/red]")
+            raise typer.Exit(1)
+
+    need_db_lookup = show_type or show_section or show_full
+    shared_mgr = _db_manager(_global_db, config)
+    rootfs_db_obj = RootfsDatabase(shared_mgr, config) if need_db_lookup else None
+
+    init_parser(config)
 
     try:
-        if not address:
-            console.print("[red]Error: --address required[/red]")
-            raise typer.Exit(1)
-
-        # Parse address
-        try:
-            if address.startswith("0x") or address.startswith("0X"):
-                addr = int(address, 16)
-            else:
-                addr = int(address, 16)
-        except ValueError:
-            console.print(f"[red]Error: Invalid address: {address}[/red]")
-            raise typer.Exit(1)
-
-        # Resolve address
-        manager = AsyncDatabaseManager(db_path)
-        db_proc = ProcessDatabase(manager, config)
-
-        console.print(f"[blue]Resolving address {addr:#x}...[/blue]")
-
-        binary_info = await db_proc.address_to_binary(pid, addr)
-
-        if not binary_info:
-            console.print(f"[yellow]Address {addr:#x} not found in process memory[/yellow]")
-            await manager.close()
-            raise typer.Exit(1)
-
-        binary_path, offset = binary_info
-
-        # Initialize parser and resolve symbol
-        init_parser(config)
         from blackadder.binutils import resolve_symbol
+        from blackadder.db import ProcessDatabase
 
-        symbol = await resolve_symbol(binary_path, offset, config)
+        rows: list[dict] = []
 
-        # Display result
-        console.print()
-        table = Table(title="Address Resolution")
-        table.add_row("Address", f"{addr:#x}")
-        table.add_row("Binary", binary_path)
-        table.add_row("Offset", f"{offset:#x}")
-        table.add_row("Symbol", symbol)
+        if mapped:
+            db_proc = ProcessDatabase(shared_mgr, config)
 
-        console.print(table)
+            for addr in parsed_addrs:
+                binary_info = await db_proc.address_to_binary(pid, addr)
+                if not binary_info:
+                    rows.append({"address": addr, "binary": "???", "offset": 0, "symbol": "???"})
+                    continue
+                bin_path, offset = binary_info
+                symbol = await resolve_symbol(bin_path, offset, config)
+                row = {"address": addr, "binary": bin_path, "offset": offset, "symbol": symbol}
+                if need_db_lookup and rootfs_db_obj:
+                    sym_info = await rootfs_db_obj.find_symbol_at_offset(bin_path, offset)
+                    row["sym_type"] = sym_info["sym_type"] if sym_info else "?"
+                    row["section"] = sym_info["section"] if sym_info else "?"
+                rows.append(row)
 
-        await manager.close()
+        else:  # unmapped
+            bin_path = binary_file
+            for offset in parsed_addrs:
+                symbol = await resolve_symbol(bin_path, offset, config)
+                row = {"address": offset, "binary": bin_path, "offset": offset, "symbol": symbol}
+                if need_db_lookup and rootfs_db_obj:
+                    sym_info = await rootfs_db_obj.find_symbol_at_offset(bin_path, offset)
+                    row["sym_type"] = sym_info["sym_type"] if sym_info else "?"
+                    row["section"] = sym_info["section"] if sym_info else "?"
+                rows.append(row)
+
+        # Output
+        if show_name:
+            for row in rows:
+                console.print(row["symbol"])
+        else:
+            table = Table(title="Address Resolution")
+            table.add_column("Address", style="cyan")
+            if mapped:
+                table.add_column("Binary", style="green")
+                table.add_column("Offset", style="cyan")
+            table.add_column("Symbol", style="green")
+            if show_type or show_full:
+                table.add_column("Type", style="yellow")
+            if show_section or show_full:
+                table.add_column("Section", style="magenta")
+
+            for row in rows:
+                cells = [f"{row['address']:#x}"]
+                if mapped:
+                    cells += [row["binary"], f"{row['offset']:#x}"]
+                cells.append(row["symbol"])
+                if show_type or show_full:
+                    cells.append(row.get("sym_type", "?"))
+                if show_section or show_full:
+                    cells.append(row.get("section", "?"))
+                table.add_row(*cells)
+
+            console.print(table)
+
+        await shared_mgr.close()
 
     except typer.Exit:
-        # Re-raise Typer exits without wrapping
         raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -285,118 +699,82 @@ async def syms(
 
 
 @app.command()
-async def load_core_dump(
-    core_file: str = typer.Option(..., "--core", "-c", help="Path to ELF core dump file"),
-    db: str | None = typer.Option(
-        None, "--db", "-d", help="Path to process database (default: blackadder-process.db)"
+async def analyse_memory(
+    rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
+    debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
+    maps_file: str | None = typer.Option(
+        None, "--maps", "-m", help="Path to /proc/PID/maps file"
+    ),
+    pid: int | None = typer.Option(None, "--pid", "-p", help="Running process PID"),
+    core_file: str | None = typer.Option(
+        None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
 ) -> None:
     """
-    Load process state from ELF core dump file (Phase 2.2).
+    Analyze memory layout and detect anomalies.
 
-    Parses core dump to extract memory mappings and process metadata
-    for offline crash analysis.
+    Accepts a maps file, a live PID, or a core dump as input.
+    If --db is given the snapshot is stored; otherwise analysis is transient (in-memory).
 
     Example:
-        baldrick load-core-dump --core /tmp/core.12345
-        baldrick load-core-dump --core ./core.dump --db my.db
+        baldrick analyse-memory --pid 12345
+        baldrick analyse-memory --maps my_process_maps.txt
+        baldrick analyse-memory --coredump core.dump
     """
-    config = _get_config_or_default()
-    db_path = db or config.process_db
-
-    try:
-        # Check file exists
-        core_path = Path(core_file)
-        if not core_path.exists():
-            console.print(f"[red]Error: core dump file not found: {core_file}[/red]")
-            raise typer.Exit(1)
-
-        # Create database and load core dump
-        manager = AsyncDatabaseManager(db_path)
-        db_proc = ProcessDatabase(manager, config)
-
-        console.print(f"[blue]Parsing core dump from {core_file}...[/blue]")
-
-        process = await db_proc.load_core_dump(str(core_path))
-
-        console.print(
-            f"[green]✓ Loaded core dump as process snapshot ID {process.id} "
-            f"with {len(process.mappings)} memory segments[/green]"
-        )
-
-        # Show summary
-        table = Table(title="Memory Segments from Core Dump")
-        table.add_column("Start Address", style="cyan")
-        table.add_column("End Address", style="cyan")
-        table.add_column("Permissions", style="magenta")
-        table.add_column("Offset", style="yellow")
-
-        for mapping in list(process.mappings)[:10]:  # Show first 10
-            size = mapping.end_addr - mapping.start_addr
-            table.add_row(
-                f"{mapping.start_addr:#x}",
-                f"{mapping.end_addr:#x}",
-                mapping.perms,
-                f"{mapping.offset:#x} ({size:#x} bytes)",
-            )
-
-        if len(process.mappings) > 10:
-            table.add_row(
-                "[yellow]...[/yellow]",
-                "[yellow]...[/yellow]",
-                "[yellow]...[/yellow]",
-                f"[yellow]({len(process.mappings) - 10} more segments)[/yellow]",
-            )
-
-        console.print(table)
-
-        console.print(f"[blue]Source: {process.source_type} ({process.source_path})[/blue]")
-
-        await manager.close()
-
-    except typer.Exit:
-        # Re-raise Typer exits without wrapping
-        raise
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+    sources = [maps_file, pid, core_file]
+    if not any(s is not None for s in sources):
+        console.print("[red]Error: Specify --maps, --pid, or --coredump[/red]")
         raise typer.Exit(1)
 
-
-@app.command()
-async def analyze_memory(
-    pid: int = typer.Option(..., "--pid", "-p", help="Process snapshot ID"),
-    db: str | None = typer.Option(None, "--db", "-d", help="Path to process database"),
-) -> None:
-    """
-    Analyze memory layout and detect anomalies (Phase 2.3).
-
-    Shows:
-    - Memory region classification (heap, stack, libraries, etc.)
-    - Detected anomalies (executable heap, oversized regions, etc.)
-    - Corruption risk assessment
-
-    Example:
-        baldrick analyze-memory --pid 1
-    """
     config = _get_config_or_default()
-    db_path = db or config.process_db
 
     try:
-        manager = AsyncDatabaseManager(db_path)
+        # Use provided DB or an in-memory DB for transient analysis
+        db_url = _to_db_url(_global_db) if _global_db else "sqlite+aiosqlite:///:memory:"
+        manager = AsyncDatabaseManager(db_url)
+        await manager.create_all()
         db_proc = ProcessDatabase(manager, config)
 
-        console.print(f"[blue]Analyzing memory layout for process {pid}...[/blue]")
+        if core_file:
+            core_path = Path(core_file)
+            if not core_path.exists():
+                console.print(f"[red]Error: core dump file not found: {core_file}[/red]")
+                raise typer.Exit(1)
+            console.print(f"[blue]Parsing core dump {core_file}...[/blue]")
+            process = await db_proc.load_core_dump(str(core_path))
+        else:
+            if pid and not maps_file:
+                proc_maps_path = f"/proc/{pid}/maps"
+                try:
+                    with open(proc_maps_path) as f:
+                        maps_text = f.read()
+                except (FileNotFoundError, PermissionError) as e:
+                    console.print(f"[red]Error: Cannot read {proc_maps_path}: {e}[/red]")
+                    raise typer.Exit(1)
+            else:
+                if not maps_file:
+                    console.print("[red]Error: Specify --maps, --pid, or --coredump[/red]")
+                    raise typer.Exit(1)
+                maps_path = Path(maps_file)
+                if not maps_path.exists():
+                    console.print(f"[red]Error: maps file not found: {maps_file}[/red]")
+                    raise typer.Exit(1)
+                with open(maps_path) as f:
+                    maps_text = f.read()
 
-        result = await db_proc.analyze_memory_layout(pid)
+            console.print("[blue]Loading memory mappings...[/blue]")
+            process = await db_proc.load_maps(pid, maps_text)
 
-        # Display results
+        console.print(f"[blue]Analyzing memory layout ({len(process.mappings)} regions)...[/blue]")
+        result = await db_proc.analyze_memory_layout(process.id)
+
         console.print()
         console.print("[green]Memory Analysis Results[/green]")
         console.print(f"Regions analyzed: {result['regions_analyzed']}")
-        console.print(f"Regions with anomalies: {len(result['anomalies'])} anomalies detected")
+        console.print(f"Anomalies detected: {len(result['anomalies'])}")
         console.print(
             f"Corruption risk: {result['corruption_risk']:.1%} "
-            f"({result['corruption_count']} regions suspicious)"
+            f"({result['corruption_count']} suspicious regions)"
         )
 
         if result["anomalies"]:
@@ -408,11 +786,101 @@ async def analyze_memory(
         await manager.close()
 
     except typer.Exit:
-        # Re-raise Typer exits without wrapping
         raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
+
+
+@app.command()
+def query(
+    name: str = typer.Argument(help="Query name or 'list' to show all available queries"),
+    param: list[str] = typer.Option(
+        [], "--param", "-p", help="Query parameter as key=value (can be repeated)"
+    ),
+    fmt: str = typer.Option(
+        "rich", "--format", "-f", help="Output format: rich, json, csv"
+    ),
+) -> None:
+    """
+    Run a named SQL query against the database.
+
+    Use 'list' to show all available queries. Parameters are passed as --param key=value.
+
+    Example:
+        baldrick --db session.db query list
+        baldrick --db session.db query snapshots
+        baldrick --db session.db query mappings --param pid=1
+        baldrick --db session.db query symbols --param binary=libc.so.6 --format csv
+        baldrick --db session.db query symbols --format json
+    """
+    from blackadder.queries import load_query_registry
+    from blackadder.query import BlackadderQuery, _db_path
+
+    registry = load_query_registry()
+
+    if name == "list":
+        table = Table(title="Available Queries")
+        table.add_column("Name", style="cyan", no_wrap=True)
+        table.add_column("Params", style="yellow", no_wrap=True)
+        table.add_column("Description", style="green")
+        for qdef in sorted(registry.values(), key=lambda q: q.name):
+            table.add_column  # noop
+            table.add_row(
+                qdef.name,
+                ", ".join(f":{p}" for p in qdef.params) if qdef.params else "—",
+                qdef.description,
+            )
+        console.print(table)
+        return
+
+    if name not in registry:
+        console.print(f"[red]Unknown query: {name!r}. Use 'list' to see available queries.[/red]")
+        raise typer.Exit(1)
+
+    # Parse --param key=value pairs
+    params: dict[str, str] = {}
+    for kv in param:
+        if "=" not in kv:
+            console.print(f"[red]Invalid --param format: {kv!r} (expected key=value)[/red]")
+            raise typer.Exit(1)
+        k, v = kv.split("=", 1)
+        params[k.strip()] = v.strip()
+
+    config = _get_config_or_default()
+    db_url = _global_db or config.db
+    db_file = _db_path(db_url) if db_url.startswith("sqlite") else db_url
+
+    try:
+        import polars as pl
+    except ImportError:
+        console.print("[red]polars is required for query command. Install with: pip install polars[/red]")
+        raise typer.Exit(1)
+
+    try:
+        q = BlackadderQuery(db_file)
+        df = q.run(name, **params)
+    except Exception as e:
+        console.print(f"[red]Query failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    if df.is_empty():
+        console.print("[yellow](no results)[/yellow]")
+        return
+
+    fmt = fmt.lower()
+
+    if fmt == "json":
+        console.print(df.write_json())
+    elif fmt == "csv":
+        console.print(df.write_csv(), end="")
+    else:  # rich (default)
+        table = Table(title=name)
+        for col in df.columns:
+            table.add_column(col, no_wrap=False)
+        for row in df.iter_rows():
+            table.add_row(*[str(v) if v is not None else "" for v in row])
+        console.print(table)
 
 
 @app.command()
@@ -426,23 +894,18 @@ def version() -> None:
 
 def main():
     """Entry point for baldrick CLI."""
-    import sys
     import asyncio
     import click
     import os
 
-    # Get the result and handle async if needed
     result = app(standalone_mode=False)
     if asyncio.iscoroutine(result):
         try:
             asyncio.run(result)
         except (click.exceptions.Exit, SystemExit) as e:
-            # Exit without printing traceback using os._exit()
-            # This bypasses Python's normal exception handler
-            exit_code = getattr(e, 'code', 1) or 1
+            exit_code = getattr(e, "code", 1) or 1
             os._exit(int(exit_code) if exit_code else 1)
         except Exception:
-            # For other exceptions, exit (they will be caught by sys.excepthook)
             os._exit(1)
 
 

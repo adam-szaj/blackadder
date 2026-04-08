@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Modern Stack**:
 - Python 3.12+ with asyncio for all I/O
 - SQLModel ORM (combines SQLAlchemy + Pydantic validation)
-- Dual SQLite databases: `rootfs.db` (static), `process.db` (dynamic)
+- Single unified SQLite database (binary metadata + process snapshots)
 - Typer CLI framework with async commands
 - Subprocess pooling via asyncio.Semaphore (max 32 concurrent)
 - LRU symbol cache (100k entries) to avoid duplicate subprocess calls
@@ -164,12 +164,11 @@ content_hash = hashlib.sha256(normalized).hexdigest()
 ```
 **Why**: Fingerprints survive ASLR, minor edits, compiler variations.
 
-### 6. Dual Databases (Separation of Concerns)
+### 6. Unified Database (Single SQLite file)
 ```
-rootfs.db        # Static binary metadata (sections, symbols, fingerprints)
-process.db       # Dynamic process state (snapshots, mappings, analysis)
+blackadder.db    # Binary metadata + process snapshots in one file
 ```
-**Why**: rootfs can be pre-built and cached; process is ephemeral or per-analysis.
+**Why**: `ProcessBinary` links process snapshots to binaries via FK — cross-file SQLite FKs are not supported. A single DB also simplifies CLI usage (one `--db` global option).
 
 ## Development Commands
 
@@ -188,13 +187,13 @@ python3 -m pytest tests/test_models.py::TestResolvedFrame -v
 # Run with coverage
 python3 -m pytest tests/ --cov=blackadder --cov-report=html
 
-# Run CLI commands
-python3 -m blackadder.cli.main load-process --maps /proc/12345/maps --pid 12345
-python3 -m blackadder.cli.main decode-backtrace --pid 12345 < backtrace.txt
-python3 -m blackadder.cli.main syms --pid 12345 --address 0x400a1c
+# Run CLI commands  (--db is a global option, placed before subcommand)
+python3 -m blackadder.cli.main --db session.db load-process --pid 12345
+python3 -m blackadder.cli.main --db session.db decode-backtrace --pid 12345 < backtrace.txt
+python3 -m blackadder.cli.main --db session.db syms --mapped --pid 12345 -- 0x400a1c
 
 # Or use entry point (after install)
-baldrick load-process --maps /proc/12345/maps --pid 12345
+baldrick --db session.db load-process --pid 12345
 
 # Type checking
 mypy blackadder/ --ignore-missing-imports
@@ -204,22 +203,20 @@ black blackadder/ tests/
 ruff check blackadder/ tests/
 ```
 
-## Database Schemas
+## Database Schema
 
-### rootfs.db (Binary Metadata)
+### blackadder.db (Unified — Binary Metadata + Process Analysis)
 
 ```sql
+-- Binary metadata (static, cached by MD5)
 binary (id, md5sum UNIQUE, name, debug_link)
 section_header (id, binary_id FK, idx, name, size, vma, lma, off, align)
 symbol (id, binary_id FK, address, scope, sym_type, section, size, name)
 binary_locator (id, path UNIQUE, md5sum FK, mtime)
 function_fingerprint (id, binary_id FK, func_name, func_offset, func_size, content_hash)
-```
 
-### process.db (Process Analysis)
-
-```sql
-processsnapshot (id, pid, created_at, description)
+-- Process snapshots (dynamic, per-session)
+processsnapshot (id, pid, created_at, description, source_type, source_path)
 memorymapping (id, process_id FK, start_addr, end_addr, perms, offset, pathname)
 processbinary (id, process_id FK, binary_id FK, mapping_id FK, binary_load_addr, match_score, match_method)
 backtrace_entry (id, process_id FK, frame_num, address, resolved_symbol, resolved_file, resolved_line, match_confidence)
@@ -272,13 +269,13 @@ See `blackadder/binutils/resolver.py:parse_backtrace_auto()` for regex patterns.
 - `CoreDumpParser`: Parse core dump headers and program headers via readelf
 - `ProcessDatabase.load_core_dump()`: Load core dump as ProcessSnapshot
 - `ProcessSnapshot.source_type` and `source_path`: Track data source (maps vs core dump)
-- CLI command: `load-core-dump`
+- CLI command: `load-process --coredump`
 
 **Files**:
 - `blackadder/binutils/coredump.py` (258 lines)
 - `blackadder/db/process.py`: +load_core_dump() method (40 lines)
 - `blackadder/models.py`: +source_type, +source_path fields
-- `blackadder/cli/main.py`: +load-core-dump command (70 lines)
+- `blackadder/cli/main.py`: core dump support added to `load-process --coredump` (70 lines)
 - `tests/test_coredump.py` (350 lines)
 - `PHASE_2_2_STATUS.md` (comprehensive implementation details)
 
