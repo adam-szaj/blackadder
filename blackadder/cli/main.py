@@ -372,17 +372,11 @@ async def load_process(
             console.print(f"[blue]Loading memory mappings...[/blue]")
             process = await db_proc.load_maps(pid, maps_text, rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag)
 
-        console.print(
-            f"[green]✓ Loaded process snapshot ID {process.id} "
-            f"with {len(process.mappings)} memory mappings[/green]"
-        )
-
-        # Build section lookup: pathname -> list of (off, off+size, name)
-        from blackadder.models import BinaryLocator, Binary, SectionHeader
+        # Build section lookup and collect debug_file info in one DB pass
+        from blackadder.models import BinaryLocator
         from sqlmodel import select as sql_select
 
-        section_map: dict[str, list[tuple[int, int, str]]] = {}
-        debug_file_map: dict[str, str] = {}  # pathname -> debug_link path
+        debug_file_map: dict[str, str] = {}  # binary pathname -> debug file path
         unique_paths = {m.pathname for m in process.mappings if m.pathname and not m.pathname.startswith("[")}
         async with proc_manager.get_session() as session:
             for path in unique_paths:
@@ -391,60 +385,70 @@ async def load_process(
                 )).scalars().first()
                 if not loc:
                     continue
-                binary = (await session.execute(
-                    sql_select(Binary).where(Binary.md5sum == loc.md5sum)
-                )).scalars().first()
-                if not binary:
-                    continue
-                if binary.debug_link:
-                    debug_file_map[path] = binary.debug_link
-                sections = (await session.execute(
-                    sql_select(SectionHeader).where(SectionHeader.binary_id == binary.id)
-                )).scalars().all()
-                section_map[path] = [(s.off, s.off + s.size, s.name) for s in sections if s.size > 0]
+                if loc.debug_file:
+                    debug_file_map[path] = loc.debug_file
 
-        def find_section(pathname: str, file_offset: int) -> str:
-            for (start, end, name) in section_map.get(pathname, []):
-                if start <= file_offset < end:
-                    return name
-            return ""
+        # Build process summary
+        mappings = process.mappings
+        total_size = sum(m.end_addr - m.start_addr for m in mappings)
 
-        table = Table(title="Memory Mappings")
-        table.add_column("Start", style="cyan", no_wrap=True)
-        table.add_column("Size", style="cyan", no_wrap=True)
-        table.add_column("Prm", style="magenta", no_wrap=True)
-        table.add_column("Offset", style="yellow", no_wrap=True)
-        table.add_column("Dev", style="dim", no_wrap=True)
-        table.add_column("Section", style="blue", no_wrap=True)
-        table.add_column("Pathname", style="green")
+        libs = {m.pathname for m in mappings
+                if m.pathname and not m.pathname.startswith("[") and m.pathname != "[anonymous]"}
+        heap_regions = [m for m in mappings if m.pathname in ("[heap]", "[anonymous]")
+                        or (not m.pathname or m.pathname == "[anonymous]") and "rw" in m.perms]
+        stack_regions = [m for m in mappings
+                         if m.pathname and (m.pathname == "[stack]" or m.pathname.startswith("[stack:"))]
+        anon_regions = [m for m in mappings
+                        if not m.pathname or m.pathname == "[anonymous]"]
+        rwx_regions = [m for m in mappings if "r" in m.perms and "w" in m.perms and "x" in m.perms]
 
-        for mapping in process.mappings:
-            size = mapping.end_addr - mapping.start_addr
-            # Size display: show in KB/MB for readability
-            if abs(size) >= 1024 * 1024:
-                size_str = f"{size // (1024*1024)}M"
-            elif abs(size) >= 1024:
-                size_str = f"{size // 1024}K"
-            else:
-                size_str = f"{size}B"
+        def _fmt_size(n: int) -> str:
+            if n >= 1024 ** 3:
+                return f"{n / 1024**3:.1f} GB"
+            if n >= 1024 ** 2:
+                return f"{n / 1024**2:.1f} MB"
+            if n >= 1024:
+                return f"{n / 1024:.1f} KB"
+            return f"{n} B"
 
-            section = find_section(mapping.pathname, mapping.offset) if mapping.offset > 0 else ""
+        # Try to read thread count from /proc/PID/status (live process only)
+        thread_count: int | None = None
+        if pid:
+            try:
+                with open(f"/proc/{pid}/status") as f:
+                    for line in f:
+                        if line.startswith("Threads:"):
+                            thread_count = int(line.split()[1])
+                            break
+            except OSError:
+                pass
 
-            table.add_row(
-                f"{mapping.start_addr:#x}",
-                size_str,
-                mapping.perms,
-                f"{mapping.offset:#x}" if mapping.offset else "0",
-                mapping.dev or "",
-                section,
-                mapping.pathname,
-            )
+        summary = Table(title=f"Process Snapshot #{process.id}", show_header=False, box=None)
+        summary.add_column("Key", style="bold cyan", no_wrap=True)
+        summary.add_column("Value", style="white")
 
-        console.print(table)
+        pid_str = str(process.pid) if process.pid else "—"
+        tag_str = f"  [dim](tag: {process.tag})[/dim]" if process.tag else ""
+        summary.add_row("PID", f"{pid_str}{tag_str}")
+        summary.add_row("Mappings", str(len(mappings)))
+        summary.add_row("Total mapped", _fmt_size(total_size))
+        summary.add_row("Libraries", str(len(libs)))
+        summary.add_row("Heap regions", str(len(heap_regions)))
+        summary.add_row("Stack regions", str(len(stack_regions)))
+        if thread_count is not None:
+            summary.add_row("Threads", str(thread_count))
+        summary.add_row("Anonymous regions", str(len(anon_regions)))
+        if rwx_regions:
+            summary.add_row("[yellow]RWX regions[/yellow]", f"[yellow]{len(rwx_regions)}[/yellow]")
+        if debug_file_map:
+            summary.add_row("Debug files", str(len(debug_file_map)))
+
+        console.print()
+        console.print(summary)
 
         if debug_file_map:
             console.print()
-            dbg_table = Table(title="Debug Files Found", show_header=True)
+            dbg_table = Table(title="Debug Files", show_header=True)
             dbg_table.add_column("Binary", style="green")
             dbg_table.add_column("Debug File", style="cyan")
             for bin_path in sorted(debug_file_map):
@@ -798,6 +802,7 @@ def query(
     param: list[str] = typer.Option(
         [], "--param", "-p", help="Query parameter as key=value (can be repeated)"
     ),
+    tag: str | None = typer.Option(None, "--tag", "-T", help="Filter snapshots by tag"),
     fmt: str = typer.Option(
         "rich", "--format", "-f", help="Output format: rich, json, csv"
     ),
@@ -806,10 +811,12 @@ def query(
     Run a named SQL query against the database.
 
     Use 'list' to show all available queries. Parameters are passed as --param key=value.
+    Use --tag to filter snapshot-related queries by tag.
 
     Example:
         baldrick --db session.db query list
         baldrick --db session.db query snapshots
+        baldrick --db session.db query snapshots --tag crash-2026
         baldrick --db session.db query mappings --param pid=1
         baldrick --db session.db query symbols --param binary=libc.so.6 --format csv
         baldrick --db session.db query symbols --format json
@@ -825,7 +832,6 @@ def query(
         table.add_column("Params", style="yellow", no_wrap=True)
         table.add_column("Description", style="green")
         for qdef in sorted(registry.values(), key=lambda q: q.name):
-            table.add_column  # noop
             table.add_row(
                 qdef.name,
                 ", ".join(f":{p}" for p in qdef.params) if qdef.params else "—",
@@ -863,6 +869,10 @@ def query(
     except Exception as e:
         console.print(f"[red]Query failed: {e}[/red]")
         raise typer.Exit(1)
+
+    if tag and "tag" in df.columns:
+        import polars as pl
+        df = df.filter(pl.col("tag") == tag)
 
     if df.is_empty():
         console.print("[yellow](no results)[/yellow]")

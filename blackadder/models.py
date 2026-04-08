@@ -134,6 +134,7 @@ class BinaryLocator(SQLModel, table=True):
     path: str = Field(unique=True, index=True)  # Full file path
     md5sum: str = Field(foreign_key="binary.md5sum")
     mtime: int  # Modification time (unix timestamp) for cache validation
+    debug_file: str | None = None  # Resolved path to companion debug file (if found)
 
 
 # ============================================================================

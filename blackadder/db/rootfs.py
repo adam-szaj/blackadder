@@ -91,11 +91,18 @@ class RootfsDatabase:
             existing = result.scalars().first()
 
             if existing:
-                # Register this path if not yet known
+                # Register this path if not yet known; update debug_file if now resolved
                 loc_stmt = select(BinaryLocator).where(BinaryLocator.path == binary_path)
                 loc_result = await session.execute(loc_stmt)
-                if not loc_result.scalars().first():
-                    session.add(BinaryLocator(path=binary_path, md5sum=md5sum, mtime=mtime))
+                locator = loc_result.scalars().first()
+                if not locator:
+                    session.add(BinaryLocator(
+                        path=binary_path, md5sum=md5sum, mtime=mtime,
+                        debug_file=debug_file_path,
+                    ))
+                    await session.commit()
+                elif debug_file_path and not locator.debug_file:
+                    locator.debug_file = debug_file_path
                     await session.commit()
 
                 sym_check = await session.execute(
@@ -124,8 +131,8 @@ class RootfsDatabase:
                 binary_id = existing.id
             else:
                 # New binary — parse and store everything
-                debug_link = debug_file_path  # only store when actually resolved
-                binary = Binary(md5sum=md5sum, name=name, debug_link=debug_link)
+                # debug_link = raw name from .gnu_debuglink section
+                binary = Binary(md5sum=md5sum, name=name, debug_link=debug_link_name)
                 session.add(binary)
                 await session.flush()
                 binary_id = binary.id
@@ -149,7 +156,10 @@ class RootfsDatabase:
                 except Exception as e:
                     logger.debug("sections_parse_failed", extra={"path": binary_path, "error": str(e)})
 
-                session.add(BinaryLocator(path=binary_path, md5sum=md5sum, mtime=mtime))
+                session.add(BinaryLocator(
+                    path=binary_path, md5sum=md5sum, mtime=mtime,
+                    debug_file=debug_file_path,
+                ))
 
             # Load symbols — shared path for both new and existing-without-symbols
             try:
