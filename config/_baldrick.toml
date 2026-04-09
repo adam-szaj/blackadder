@@ -1,0 +1,56 @@
+# ~/.baldrick.toml — Baldrick user configuration
+#
+# Theme and custom queries are loaded on every baldrick invocation.
+# Local ./baldrick.toml (if present) overrides this file.
+
+# ============================================================================
+# Color theme — Tokyo Night (default)
+#
+# All values are Rich-compatible color strings:
+#   hex:   "#7aa2f7"
+#   named: "cyan", "green", "bold red", "dim blue"
+#
+# Types:
+#   address     — hex addresses, offsets, virtual addresses
+#   symbol      — function/variable names
+#   binary      — binary names, file paths, pathnames
+#   size        — byte sizes, counts
+#   flags       — permissions (rwxp), ELF flags, sym types
+#   section     — ELF section names (.text, .data, …)
+#   debug       — debug file paths, source locations
+#   meta        — IDs, frame numbers, timestamps, indices
+#   description — human-readable text, tags, descriptions
+# ============================================================================
+
+[theme]
+address     = "#7aa2f7"   # blue
+symbol      = "#e0af68"   # gold
+binary      = "#bb9af7"   # purple
+size        = "#9ece6a"   # green
+flags       = "#f7768e"   # red/pink
+section     = "#2ac3de"   # cyan
+debug       = "#565f89"   # dim blue-grey
+meta        = "#737aa2"   # grey
+description = "#a9b1d6"   # light grey
+
+# Numeric formatting per type:
+#   address_format = "hex" | "dec"        (default: hex → 0x7f001000)
+#   offset_format  = "hex" | "dec"        (default: hex → 0x1000)
+#   size_format    = "human" | "hex" | "dec"  (default: human → 4.0 KB)
+address_format = "hex"
+offset_format  = "hex"
+size_format    = "human"
+
+# ============================================================================
+# Custom queries  (override or extend built-in queries)
+#
+# [query.<name>]
+# sql         = "SELECT ..."   # named params: :param_name
+# description = "What it does"
+# params      = ["param1"]     # optional, for documentation in 'query list'
+#
+# Example:
+# [query.recent]
+# sql         = "SELECT id, pid, tag, created_at FROM processsnapshot ORDER BY id DESC LIMIT 10"
+# description = "10 most recent process snapshots"
+# ============================================================================
