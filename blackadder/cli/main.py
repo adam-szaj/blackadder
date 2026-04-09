@@ -423,12 +423,13 @@ async def load_process(
             except OSError:
                 pass
 
-        summary = Table(title=f"Process Snapshot #{process.id}", show_header=False, box=None)
+        summary = Table(title="Process Snapshot", show_header=False, box=None)
         summary.add_column("Key", style="bold cyan", no_wrap=True)
         summary.add_column("Value", style="white")
 
         pid_str = str(process.pid) if process.pid else "—"
         tag_str = f"  [dim](tag: {process.tag})[/dim]" if process.tag else ""
+        summary.add_row("Snapshot ID", str(process.id))
         summary.add_row("PID", f"{pid_str}{tag_str}")
         summary.add_row("Mappings", str(len(mappings)))
         summary.add_row("Total mapped", _fmt_size(total_size))
@@ -797,6 +798,53 @@ async def analyse_memory(
 
 
 @app.command()
+async def tag(
+    snapshot_id: int = typer.Argument(help="Snapshot ID to tag"),
+    new_tag: str = typer.Argument(help="New tag value (empty string to remove)"),
+) -> None:
+    """
+    Set or update the tag on an existing process snapshot.
+
+    Pass an empty string to remove the tag.
+
+    Example:
+        baldrick --db session.db tag 1 crash-2026
+        baldrick --db session.db tag 1 ""
+    """
+    from blackadder.models import ProcessSnapshot
+    from sqlmodel import select as sql_select
+
+    config = _get_config_or_default()
+    manager = _db_manager(_global_db, config)
+
+    try:
+        await manager.create_all()
+        async with manager.get_session() as session:
+            result = await session.execute(
+                sql_select(ProcessSnapshot).where(ProcessSnapshot.id == snapshot_id)
+            )
+            snapshot = result.scalars().first()
+            if snapshot is None:
+                console.print(f"[red]Error: No snapshot with id={snapshot_id}[/red]")
+                raise typer.Exit(1)
+            old_tag = snapshot.tag
+            snapshot.tag = new_tag or None
+            session.add(snapshot)
+            await session.commit()
+
+        action = "removed" if not new_tag else f"set to [cyan]{new_tag}[/cyan]"
+        old_str = f" (was [dim]{old_tag}[/dim])" if old_tag else ""
+        console.print(f"[green]✓ Snapshot {snapshot_id}: tag {action}{old_str}[/green]")
+        await manager.close()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def query(
     name: str = typer.Argument(help="Query name or 'list' to show all available queries"),
     param: list[str] = typer.Option(
@@ -811,15 +859,15 @@ def query(
     Run a named SQL query against the database.
 
     Use 'list' to show all available queries. Parameters are passed as --param key=value.
-    Use --tag to filter snapshot-related queries by tag.
+    For snapshot queries use --param id=N or --tag <tag> to select the snapshot.
 
     Example:
         baldrick --db session.db query list
         baldrick --db session.db query snapshots
         baldrick --db session.db query snapshots --tag crash-2026
-        baldrick --db session.db query mappings --param pid=1
+        baldrick --db session.db query mappings --param id=1
+        baldrick --db session.db query libs --tag crash-2026
         baldrick --db session.db query symbols --param binary=libc.so.6 --format csv
-        baldrick --db session.db query symbols --format json
     """
     from blackadder.queries import load_query_registry
     from blackadder.query import BlackadderQuery, _db_path
@@ -863,16 +911,29 @@ def query(
         console.print("[red]polars is required for query command. Install with: pip install polars[/red]")
         raise typer.Exit(1)
 
+    qdef = registry[name]
+
+    # Route --tag: for snapshot queries (params include 'id'), pass tag to run_query
+    # for resolution.  For other queries (e.g. snapshots), post-filter on tag column.
+    post_filter_tag: str | None = None
+    if tag:
+        if "id" in qdef.params and "id" not in params:
+            params["tag"] = tag  # run_query will resolve tag → snapshot id
+        else:
+            post_filter_tag = tag  # post-filter on result 'tag' column
+
     try:
         q = BlackadderQuery(db_file)
         df = q.run(name, **params)
+    except KeyError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Query failed: {e}[/red]")
         raise typer.Exit(1)
 
-    if tag and "tag" in df.columns:
-        import polars as pl
-        df = df.filter(pl.col("tag") == tag)
+    if post_filter_tag and "tag" in df.columns:
+        df = df.filter(pl.col("tag") == post_filter_tag)
 
     if df.is_empty():
         console.print("[yellow](no results)[/yellow]")

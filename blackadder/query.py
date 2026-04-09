@@ -31,6 +31,24 @@ def _db_path(path_or_url: str) -> str:
     return path_or_url
 
 
+def _resolve_tag_to_id(conn: sqlite3.Connection, params: dict[str, Any]) -> None:
+    """
+    If params contains 'tag' but not 'id', resolve tag → snapshot id in-place.
+
+    Picks the most recent snapshot with that tag (highest id).
+    Raises KeyError if no matching snapshot is found.
+    """
+    if "id" not in params and "tag" in params:
+        tag_val = params.pop("tag")
+        row = conn.execute(
+            "SELECT id FROM processsnapshot WHERE tag = ? ORDER BY id DESC LIMIT 1",
+            (tag_val,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"No snapshot found with tag={tag_val!r}")
+        params["id"] = row[0]
+
+
 def run_query(
     db_path: str,
     sql: str,
@@ -38,6 +56,9 @@ def run_query(
 ) -> pl.DataFrame:
     """
     Execute a named-parameter SQL query against the database and return a DataFrame.
+
+    Supports tag→id resolution: if params contains 'tag' but not 'id', looks up
+    the most recent processsnapshot with that tag and substitutes its id.
 
     Args:
         db_path: Path to SQLite database (or sqlite+aiosqlite:/// URL)
@@ -48,11 +69,11 @@ def run_query(
         polars.DataFrame with query results
     """
     clean_path = _db_path(db_path)
+    params = dict(params) if params else {}
     conn = sqlite3.connect(clean_path)
     try:
-        # Polars read_database wants the connection and an optional execute_options
-        # for parameter binding.  Named params work via sqlite3 directly.
-        cursor = conn.execute(sql, params or {})
+        _resolve_tag_to_id(conn, params)
+        cursor = conn.execute(sql, params)
         columns = [d[0] for d in cursor.description] if cursor.description else []
         rows = cursor.fetchall()
         return pl.DataFrame(
@@ -69,7 +90,8 @@ class BlackadderQuery:
     Example:
         q = BlackadderQuery("session.db")
         df = q.run("symbols", binary="libc.so.6")
-        df = q.run("mappings", pid=1)
+        df = q.run("mappings", id=1)
+        df = q.run("mappings", tag="crash-2026")   # resolves tag → snapshot id
         df = q.run_sql("SELECT * FROM processsnapshot WHERE tag = :tag", tag="crash")
     """
 

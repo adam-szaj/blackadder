@@ -37,10 +37,10 @@ BUILTIN_QUERIES: list[QueryDef] = [
         name="mappings",
         sql=(
             "SELECT id, start_addr, end_addr, perms, offset, dev, inode, pathname "
-            "FROM memorymapping WHERE process_id = :pid ORDER BY start_addr"
+            "FROM memorymapping WHERE process_id = :id ORDER BY start_addr"
         ),
         description="Memory mappings for a process snapshot",
-        params=["pid"],
+        params=["id"],
     ),
     QueryDef(
         name="binaries",
@@ -75,32 +75,32 @@ BUILTIN_QUERIES: list[QueryDef] = [
         name="backtrace",
         sql=(
             "SELECT frame_num, address, resolved_symbol, resolved_file, resolved_line, match_confidence "
-            "FROM backtraceentry WHERE process_id = :pid ORDER BY frame_num"
+            "FROM backtraceentry WHERE process_id = :id ORDER BY frame_num"
         ),
         description="Decoded backtrace frames for a process snapshot",
-        params=["pid"],
+        params=["id"],
     ),
     QueryDef(
         name="libs",
         sql=(
             "SELECT DISTINCT pathname "
             "FROM memorymapping "
-            "WHERE process_id = :pid AND pathname NOT LIKE '[%' AND pathname != '[anonymous]' "
+            "WHERE process_id = :id AND pathname NOT LIKE '[%' AND pathname != '[anonymous]' "
             "ORDER BY pathname"
         ),
         description="Shared libraries loaded by a process snapshot",
-        params=["pid"],
+        params=["id"],
     ),
     QueryDef(
         name="rwx",
         sql=(
             "SELECT id, start_addr, end_addr, perms, pathname "
             "FROM memorymapping "
-            "WHERE process_id = :pid AND perms LIKE '%rwx%' "
+            "WHERE process_id = :id AND perms LIKE '%rwx%' "
             "ORDER BY start_addr"
         ),
         description="RWX (read-write-execute) memory regions — potential anomalies",
-        params=["pid"],
+        params=["id"],
     ),
     QueryDef(
         name="process-binaries",
@@ -110,11 +110,11 @@ BUILTIN_QUERIES: list[QueryDef] = [
             "FROM processbinary pb "
             "LEFT JOIN binary b ON b.id = pb.binary_id "
             "JOIN memorymapping m ON m.id = pb.mapping_id "
-            "WHERE pb.process_id = :pid "
+            "WHERE pb.process_id = :id "
             "ORDER BY pb.binary_load_addr"
         ),
         description="Binaries linked to a process snapshot with match info",
-        params=["pid"],
+        params=["id"],
     ),
 ]
 
