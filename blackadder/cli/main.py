@@ -23,14 +23,16 @@ from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
 from blackadder.db.rootfs import RootfsDatabase
 from blackadder.logging_config import setup_logging
+from blackadder.theme import ColorTheme, column_style, format_value, load_theme
 
 app = typer.Typer(
     help="Baldrick - Linux debugging tool for backtrace decoding and symbol resolution"
 )
 console = Console()
 
-# Module-level storage for global --db option set in callback
+# Module-level storage for global options set in callback
 _global_db: str | None = None
+_theme: ColorTheme = ColorTheme()  # default Tokyo Night; overridden in callback
 
 
 @app.callback()
@@ -41,8 +43,9 @@ def _global_options(
     db: str | None = typer.Option(None, "--db", "-d", help="Path to database (overrides config default)"),
 ) -> None:
     """Global options applied to all commands."""
-    global _global_db
+    global _global_db, _theme
     _global_db = db
+    _theme = load_theme()
     level = "DEBUG" if debug else log_level.upper()
     setup_logging(level, log_file)
 
@@ -450,8 +453,8 @@ async def load_process(
         if debug_file_map:
             console.print()
             dbg_table = Table(title="Debug Files", show_header=True)
-            dbg_table.add_column("Binary", style="green")
-            dbg_table.add_column("Debug File", style="cyan")
+            dbg_table.add_column("Binary", style=_theme.binary)
+            dbg_table.add_column("Debug File", style=_theme.debug)
             for bin_path in sorted(debug_file_map):
                 dbg_table.add_row(bin_path, debug_file_map[bin_path])
             console.print(dbg_table)
@@ -525,10 +528,10 @@ async def decode_backtrace(
 
         console.print()
         table = Table(title="Decoded Backtrace")
-        table.add_column("#", style="cyan", width=3)
-        table.add_column("Address", style="cyan")
-        table.add_column("Symbol", style="green")
-        table.add_column("Location", style="yellow")
+        table.add_column("#", style=_theme.meta, width=3)
+        table.add_column("Address", style=_theme.address)
+        table.add_column("Symbol", style=_theme.symbol)
+        table.add_column("Location", style=_theme.debug)
 
         for frame in frames:
             location = ""
@@ -671,15 +674,15 @@ async def decode_address(
                 console.print(row["symbol"])
         else:
             table = Table(title="Address Resolution")
-            table.add_column("Address", style="cyan")
+            table.add_column("Address", style=_theme.address)
             if mapped:
-                table.add_column("Binary", style="green")
-                table.add_column("Offset", style="cyan")
-            table.add_column("Symbol", style="green")
+                table.add_column("Binary", style=_theme.binary)
+                table.add_column("Offset", style=_theme.address)
+            table.add_column("Symbol", style=_theme.symbol)
             if show_type or show_full:
-                table.add_column("Type", style="yellow")
+                table.add_column("Type", style=_theme.flags)
             if show_section or show_full:
-                table.add_column("Section", style="magenta")
+                table.add_column("Section", style=_theme.section)
 
             for row in rows:
                 cells = [f"{row['address']:#x}"]
@@ -876,9 +879,9 @@ def query(
 
     if name == "list":
         table = Table(title="Available Queries")
-        table.add_column("Name", style="cyan", no_wrap=True)
-        table.add_column("Params", style="yellow", no_wrap=True)
-        table.add_column("Description", style="green")
+        table.add_column("Name", style=_theme.symbol, no_wrap=True)
+        table.add_column("Params", style=_theme.flags, no_wrap=True)
+        table.add_column("Description", style=_theme.description)
         for qdef in sorted(registry.values(), key=lambda q: q.name):
             table.add_row(
                 qdef.name,
@@ -948,9 +951,9 @@ def query(
     else:  # rich (default)
         table = Table(title=name)
         for col in df.columns:
-            table.add_column(col, no_wrap=False)
+            table.add_column(col, style=column_style(col, _theme), no_wrap=False)
         for row in df.iter_rows():
-            table.add_row(*[str(v) if v is not None else "" for v in row])
+            table.add_row(*[format_value(col, v, _theme) for col, v in zip(df.columns, row)])
         console.print(table)
 
 
