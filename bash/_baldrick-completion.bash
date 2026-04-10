@@ -341,6 +341,9 @@ _baldrick_complete_query() {
             _baldrick_pick_tag
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
+        --sql|-s)
+            # No completion for raw SQL text
+            return ;;
         --param|-p)
             # Context-aware: what param does this query expect?
             case "$query_name" in
@@ -377,10 +380,17 @@ _baldrick_complete_query() {
             return ;;
     esac
 
-    # First positional after 'query' = query name
+    # First positional after 'query' = query name (or special: list, sql)
     if [[ -z "$query_name" ]]; then
+        # Offer built-in specials + fzf over named queries
+        case "$cur" in
+            l*)  COMPREPLY=( $(compgen -W "list" -- "$cur") ); return ;;
+            s*)  COMPREPLY=( $(compgen -W "sql" -- "$cur") ); return ;;
+        esac
         _baldrick_pick_query_name
         [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
+    elif [[ "$query_name" == "sql" ]]; then
+        COMPREPLY=( $(compgen -W "--sql -s --format -f" -- "$cur") )
     else
         COMPREPLY=( $(compgen -W "--param -p --tag -T --format -f" -- "$cur") )
     fi
@@ -397,7 +407,7 @@ _baldrick_complete() {
 
     # Global options (before subcommand)
     local global_opts="--db -d --debug --log-level --log-file --help"
-    local commands="load load-process decode-backtrace decode-address analyse-memory tag query version"
+    local commands="load load-process decode-backtrace decode-address analyse-memory tag query schema version"
 
     # Handle global options
     case "$prev" in
@@ -411,7 +421,7 @@ _baldrick_complete() {
     local i
     for (( i=1; i<${#COMP_WORDS[@]}; i++ )); do
         case "${COMP_WORDS[$i]}" in
-            load|load-process|decode-backtrace|decode-address|analyse-memory|tag|query|version)
+            load|load-process|decode-backtrace|decode-address|analyse-memory|tag|query|schema|version)
                 cmd="${COMP_WORDS[$i]}"
                 break
                 ;;
@@ -436,6 +446,7 @@ _baldrick_complete() {
         analyse-memory)     _baldrick_complete_analyse_memory     "$cur" "$prev" ;;
         tag)                _baldrick_complete_tag                "$cur" "$prev" ;;
         query)              _baldrick_complete_query              "$cur" "$prev" ;;
+        schema)             COMPREPLY=() ;;
         version)            COMPREPLY=() ;;
     esac
 }

@@ -849,7 +849,7 @@ async def tag(
 
 @app.command()
 def query(
-    name: str = typer.Argument(help="Query name or 'list' to show all available queries"),
+    name: str = typer.Argument(help="Query name, 'list' to show all queries, or 'sql' to run inline SQL"),
     param: list[str] = typer.Option(
         [], "--param", "-p", help="Query parameter as key=value (can be repeated)"
     ),
@@ -857,12 +857,16 @@ def query(
     fmt: str = typer.Option(
         "rich", "--format", "-f", help="Output format: rich, json, csv"
     ),
+    sql: str | None = typer.Option(
+        None, "--sql", "-s", help="Inline SQL to execute (used with 'sql' subcommand)"
+    ),
 ) -> None:
     """
     Run a named SQL query against the database.
 
     Use 'list' to show all available queries. Parameters are passed as --param key=value.
     For snapshot queries use --param id=N or --tag <tag> to select the snapshot.
+    Use 'sql' with --sql to run arbitrary SQL directly.
 
     Example:
         baldrick --db session.db query list
@@ -871,9 +875,10 @@ def query(
         baldrick --db session.db query mappings --param id=1
         baldrick --db session.db query libs --tag crash-2026
         baldrick --db session.db query symbols --param binary=libc.so.6 --format csv
+        baldrick --db session.db query sql --sql "SELECT id, pid, tag FROM processsnapshot"
     """
     from blackadder.queries import load_query_registry
-    from blackadder.query import BlackadderQuery, _db_path
+    from blackadder.query import BlackadderQuery, _db_path, run_query
 
     registry = load_query_registry()
 
@@ -891,19 +896,6 @@ def query(
         console.print(table)
         return
 
-    if name not in registry:
-        console.print(f"[red]Unknown query: {name!r}. Use 'list' to see available queries.[/red]")
-        raise typer.Exit(1)
-
-    # Parse --param key=value pairs
-    params: dict[str, str] = {}
-    for kv in param:
-        if "=" not in kv:
-            console.print(f"[red]Invalid --param format: {kv!r} (expected key=value)[/red]")
-            raise typer.Exit(1)
-        k, v = kv.split("=", 1)
-        params[k.strip()] = v.strip()
-
     config = _get_config_or_default()
     db_url = _global_db or config.db
     db_file = _db_path(db_url) if db_url.startswith("sqlite") else db_url
@@ -914,29 +906,56 @@ def query(
         console.print("[red]polars is required for query command. Install with: pip install polars[/red]")
         raise typer.Exit(1)
 
-    qdef = registry[name]
+    # Inline SQL mode
+    if name == "sql":
+        if not sql:
+            console.print("[red]--sql <SQL> is required when using 'sql' subcommand[/red]")
+            raise typer.Exit(1)
+        try:
+            df = run_query(db_file, sql)
+        except Exception as e:
+            console.print(f"[red]Query failed: {e}[/red]")
+            raise typer.Exit(1)
+        title = "sql"
+    else:
+        if name not in registry:
+            console.print(f"[red]Unknown query: {name!r}. Use 'list' to see available queries.[/red]")
+            raise typer.Exit(1)
 
-    # Route --tag: for snapshot queries (params include 'id'), pass tag to run_query
-    # for resolution.  For other queries (e.g. snapshots), post-filter on tag column.
-    post_filter_tag: str | None = None
-    if tag:
-        if "id" in qdef.params and "id" not in params:
-            params["tag"] = tag  # run_query will resolve tag → snapshot id
-        else:
-            post_filter_tag = tag  # post-filter on result 'tag' column
+        # Parse --param key=value pairs
+        params: dict[str, str] = {}
+        for kv in param:
+            if "=" not in kv:
+                console.print(f"[red]Invalid --param format: {kv!r} (expected key=value)[/red]")
+                raise typer.Exit(1)
+            k, v = kv.split("=", 1)
+            params[k.strip()] = v.strip()
 
-    try:
-        q = BlackadderQuery(db_file)
-        df = q.run(name, **params)
-    except KeyError as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
-    except Exception as e:
-        console.print(f"[red]Query failed: {e}[/red]")
-        raise typer.Exit(1)
+        qdef = registry[name]
 
-    if post_filter_tag and "tag" in df.columns:
-        df = df.filter(pl.col("tag") == post_filter_tag)
+        # Route --tag: for snapshot queries (params include 'id'), pass tag to run_query
+        # for resolution.  For other queries (e.g. snapshots), post-filter on tag column.
+        post_filter_tag: str | None = None
+        if tag:
+            if "id" in qdef.params and "id" not in params:
+                params["tag"] = tag  # run_query will resolve tag → snapshot id
+            else:
+                post_filter_tag = tag  # post-filter on result 'tag' column
+
+        try:
+            q = BlackadderQuery(db_file)
+            df = q.run(name, **params)
+        except KeyError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"[red]Query failed: {e}[/red]")
+            raise typer.Exit(1)
+
+        if post_filter_tag and "tag" in df.columns:
+            df = df.filter(pl.col("tag") == post_filter_tag)
+
+        title = name
 
     if df.is_empty():
         console.print("[yellow](no results)[/yellow]")
@@ -949,12 +968,67 @@ def query(
     elif fmt == "csv":
         console.print(df.write_csv(), end="")
     else:  # rich (default)
-        table = Table(title=name)
+        table = Table(title=title)
         for col in df.columns:
             table.add_column(col, style=column_style(col, _theme), no_wrap=False)
         for row in df.iter_rows():
             table.add_row(*[format_value(col, v, _theme) for col, v in zip(df.columns, row)])
         console.print(table)
+
+
+@app.command()
+def schema() -> None:
+    """
+    Show the database schema — all tables with their columns and types.
+
+    Example:
+        baldrick --db session.db schema
+    """
+    import sqlite3
+    from blackadder.query import _db_path
+
+    config = _get_config_or_default()
+    db_url = _global_db or config.db
+    db_file = _db_path(db_url) if db_url.startswith("sqlite") else db_url
+
+    try:
+        conn = sqlite3.connect(db_file)
+    except Exception as e:
+        console.print(f"[red]Cannot open database: {e}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
+        ]
+        if not tables:
+            console.print("[yellow]No tables found in database.[/yellow]")
+            return
+
+        for table_name in tables:
+            cols = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            t = Table(title=table_name, title_style=f"bold {_theme.section}")
+            t.add_column("Column", style=_theme.symbol, no_wrap=True)
+            t.add_column("Type", style=_theme.flags, no_wrap=True)
+            t.add_column("NotNull", style=_theme.meta, no_wrap=True)
+            t.add_column("Default", style=_theme.description, no_wrap=True)
+            t.add_column("PK", style=_theme.meta, no_wrap=True)
+            for col in cols:
+                # col: (cid, name, type, notnull, dflt_value, pk)
+                _, col_name, col_type, notnull, dflt, pk = col
+                t.add_row(
+                    col_name,
+                    col_type or "",
+                    "✓" if notnull else "",
+                    str(dflt) if dflt is not None else "",
+                    str(pk) if pk else "",
+                )
+            console.print(t)
+    finally:
+        conn.close()
 
 
 @app.command()
