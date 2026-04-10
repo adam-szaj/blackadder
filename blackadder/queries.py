@@ -116,6 +116,29 @@ BUILTIN_QUERIES: list[QueryDef] = [
         description="Binaries linked to a process snapshot with match info",
         params=["id"],
     ),
+    QueryDef(
+        name="symbol-cache",
+        sql=(
+            "SELECT sc.offset, sc.symbol, sc.source_file, sc.source_line, b.name AS binary_name "
+            "FROM symbolcache sc "
+            "JOIN binary b ON b.id = sc.binary_id "
+            "WHERE b.name = :binary "
+            "ORDER BY sc.offset"
+        ),
+        description="Persistent symbol cache entries for a binary",
+        params=["binary"],
+    ),
+    QueryDef(
+        name="symbol-cache-stats",
+        sql=(
+            "SELECT b.name AS binary_name, COUNT(*) AS cached_symbols "
+            "FROM symbolcache sc "
+            "JOIN binary b ON b.id = sc.binary_id "
+            "GROUP BY b.name "
+            "ORDER BY cached_symbols DESC"
+        ),
+        description="Symbol cache hit counts per binary",
+    ),
 ]
 
 _BUILTIN_MAP: dict[str, QueryDef] = {q.name: q for q in BUILTIN_QUERIES}

@@ -25,6 +25,7 @@ from blackadder.models import (
     ProcessBinary,
     ProcessSnapshot,
     ResolvedFrame,
+    SymbolCache,
 )
 
 from .base import AsyncDatabaseManager
@@ -178,18 +179,22 @@ class ProcessDatabase:
         await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
         return process
 
-    async def address_to_binary(self, pid: int, addr: int) -> tuple[str, int] | None:
+    async def address_to_binary(
+        self, pid: int, addr: int
+    ) -> tuple[str, int, int | None] | None:
         """
-        Resolve an address to its binary path and offset.
+        Resolve an address to its binary path, offset within binary, and binary_id.
 
-        Uses database query to find which MemoryMapping contains the address.
+        Uses database query to find which MemoryMapping contains the address,
+        then looks up the associated binary_id from ProcessBinary.
 
         Args:
-            pid: Process ID
+            pid: Process ID (ProcessSnapshot.id)
             addr: Virtual address to resolve
 
         Returns:
-            Tuple of (binary_path, offset) or None if address not found
+            Tuple of (binary_path, offset, binary_id) or None if address not found.
+            binary_id may be None if binary is not in the database.
         """
         logger.debug(
             "resolving_address",
@@ -208,27 +213,34 @@ class ProcessDatabase:
             result = await session.execute(statement)  # type: ignore
             mapping = result.first()
 
-            if mapping:
-                offset = addr - mapping.start_addr + mapping.offset
+            if not mapping:
                 logger.debug(
-                    "address_resolved",
-                    extra={
-                        "pid": pid,
-                        "address": hex(addr),
-                        "binary": mapping.pathname,
-                        "offset": hex(offset),
-                    },
+                    "address_not_found_in_mappings",
+                    extra={"pid": pid, "address": hex(addr)},
                 )
-                return mapping.pathname, offset
+                return None
 
-        logger.debug(
-            "address_not_found_in_mappings",
-            extra={
-                "pid": pid,
-                "address": hex(addr),
-            },
-        )
-        return None
+            offset = addr - mapping.start_addr + mapping.offset
+
+            # Look up binary_id from ProcessBinary for this mapping
+            pb_stmt = select(ProcessBinary).where(
+                ProcessBinary.mapping_id == mapping.id
+            )
+            pb_result = await session.execute(pb_stmt)  # type: ignore
+            pb = pb_result.scalars().first()
+            binary_id = pb.binary_id if pb else None
+
+            logger.debug(
+                "address_resolved",
+                extra={
+                    "pid": pid,
+                    "address": hex(addr),
+                    "binary": mapping.pathname,
+                    "offset": hex(offset),
+                    "binary_id": binary_id,
+                },
+            )
+            return mapping.pathname, offset, binary_id
 
     async def decode_backtrace(self, pid: int, addresses: list[int]) -> list[ResolvedFrame]:
         """
@@ -343,10 +355,10 @@ class ProcessDatabase:
                 symbol="???",
             )
 
-        binary_path, offset = binary_info
+        binary_path, offset, binary_id = binary_info
 
         # Resolve symbol (with caching and semaphore limiting)
-        symbol = await self._get_cached_symbol(binary_path, offset)
+        symbol = await self._get_cached_symbol(binary_path, offset, binary_id)
 
         return ResolvedFrame(
             address=addr,
@@ -354,35 +366,50 @@ class ProcessDatabase:
             symbol=symbol,
         )
 
-    async def _get_cached_symbol(self, binary_path: str, offset: int) -> str:
+    async def _get_cached_symbol(
+        self, binary_path: str, offset: int, binary_id: int | None = None
+    ) -> str:
         """
-        Get symbol for binary:offset pair with caching.
+        Get symbol for binary:offset pair with three-tier caching.
 
-        Implements LRU-like caching to avoid repeated subprocess calls.
-        Uses subprocess_sem to limit concurrent addr2line/objdump calls.
+        Tier 1 — in-memory dict (fastest, lost on restart)
+        Tier 2 — SQLite SymbolCache (persistent, keyed by binary_id+offset)
+        Tier 3 — addr2line/objdump subprocess (slowest, result persisted to SQLite)
+
+        SQLite tier is only used when binary_id is known (binary is in DB).
+        Falls back gracefully to in-memory + subprocess when binary_id is None.
 
         Args:
-            binary_path: Path to binary
-            offset: Offset within binary
+            binary_path: Path to binary file
+            offset:      File offset within binary
+            binary_id:   DB id of binary (None if not in DB)
 
         Returns:
-            Symbol name or "???" if not found or on resolution error
+            Symbol name or "???" if resolution fails
         """
         cache_key = (binary_path, offset)
 
-        # Check cache first (fast path)
+        # Tier 1: in-memory cache (fastest)
         if cache_key in self.symbol_cache:
-            logger.debug(
-                "symbol_cache_hit",
-                extra={
-                    "binary_path": binary_path,
-                    "offset": offset,
-                },
-            )
+            logger.debug("symbol_cache_hit_memory", extra={"binary_path": binary_path, "offset": offset})
             return self.symbol_cache[cache_key]
 
-        # Resolve via subprocess (with semaphore limit)
-        # Import here to avoid circular import
+        # Tier 2: SQLite persistent cache
+        if binary_id is not None:
+            async with self.manager.get_session() as session:
+                stmt = select(SymbolCache).where(
+                    (SymbolCache.binary_id == binary_id)
+                    & (SymbolCache.offset == offset)
+                )
+                result = await session.execute(stmt)  # type: ignore
+                cached = result.scalars().first()
+                if cached is not None:
+                    symbol = cached.symbol or "???"
+                    logger.debug("symbol_cache_hit_db", extra={"binary_path": binary_path, "offset": offset})
+                    self.symbol_cache[cache_key] = symbol
+                    return symbol
+
+        # Tier 3: subprocess resolution
         from blackadder.binutils import resolve_symbol
 
         try:
@@ -391,35 +418,42 @@ class ProcessDatabase:
         except Exception as e:
             logger.warning(
                 "symbol_resolution_failed",
-                extra={
-                    "binary_path": binary_path,
-                    "offset": offset,
-                    "error": str(e),
-                },
+                extra={"binary_path": binary_path, "offset": offset, "error": str(e)},
             )
             return "???"
 
-        # Cache result with size limit
-        if len(self.symbol_cache) > self.config.max_symbol_cache_size:
-            # Simple FIFO eviction (could use OrderedDict for true LRU)
-            self.symbol_cache.pop(next(iter(self.symbol_cache)))
-            logger.debug(
-                "symbol_cache_evicted",
-                extra={
-                    "cache_size": len(self.symbol_cache),
-                },
+        # Persist to SQLite (fire-and-forget, don't block caller)
+        if binary_id is not None:
+            asyncio.ensure_future(
+                self._persist_symbol_cache(binary_id, offset, symbol)
             )
 
+        # Store in in-memory cache with FIFO eviction
+        if len(self.symbol_cache) > self.config.max_symbol_cache_size:
+            self.symbol_cache.pop(next(iter(self.symbol_cache)))
+            logger.debug("symbol_cache_evicted", extra={"cache_size": len(self.symbol_cache)})
+
         self.symbol_cache[cache_key] = symbol
-        logger.debug(
-            "symbol_cached",
-            extra={
-                "binary_path": binary_path,
-                "offset": offset,
-                "symbol": symbol,
-            },
-        )
+        logger.debug("symbol_resolved", extra={"binary_path": binary_path, "offset": offset, "symbol": symbol})
         return symbol
+
+    async def _persist_symbol_cache(self, binary_id: int, offset: int, symbol: str) -> None:
+        """Persist a resolved symbol to the SQLite SymbolCache table (INSERT OR IGNORE)."""
+        try:
+            async with self.manager.get_session() as session:
+                # Use INSERT OR IGNORE semantics via merge/get pattern
+                stmt = select(SymbolCache).where(
+                    (SymbolCache.binary_id == binary_id)
+                    & (SymbolCache.offset == offset)
+                )
+                result = await session.execute(stmt)  # type: ignore
+                existing = result.scalars().first()
+                if existing is None:
+                    entry = SymbolCache(binary_id=binary_id, offset=offset, symbol=symbol)
+                    session.add(entry)
+                    await session.commit()
+        except Exception as e:
+            logger.debug("symbol_cache_persist_failed", extra={"binary_id": binary_id, "offset": offset, "error": str(e)})
 
     async def analyze_memory_layout(
         self,

@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, field_validator
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 # ============================================================================
@@ -121,6 +122,24 @@ class FunctionFingerprint(SQLModel, table=True):
 
     # Relationships
     binary: Binary = Relationship(back_populates="fingerprints")
+
+
+class SymbolCache(SQLModel, table=True):
+    """
+    Persistent cache of addr2line/objdump results keyed by (binary_id, offset).
+
+    Survives process restarts — avoids re-running addr2line for the same
+    binary:offset across sessions. One row per unique (binary, offset) pair.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    binary_id: int = Field(foreign_key="binary.id", index=True)
+    offset: int  # File offset within binary (not virtual address)
+    symbol: str | None = Field(default=None, max_length=512)   # demangled symbol name
+    source_file: str | None = Field(default=None, max_length=512)
+    source_line: int | None = None
+
+    __table_args__ = (UniqueConstraint("binary_id", "offset", name="uq_symbolcache_binary_offset"),)
 
 
 class BinaryLocator(SQLModel, table=True):

@@ -648,7 +648,7 @@ async def decode_address(
                 if not binary_info:
                     rows.append({"address": addr, "binary": "???", "offset": 0, "symbol": "???"})
                     continue
-                bin_path, offset = binary_info
+                bin_path, offset, _binary_id = binary_info
                 symbol = await resolve_symbol(bin_path, offset, config)
                 row = {"address": addr, "binary": bin_path, "offset": offset, "symbol": symbol}
                 if need_db_lookup and rootfs_db_obj:
