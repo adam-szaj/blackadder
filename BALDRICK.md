@@ -95,6 +95,7 @@ parameters:
 **load-process <parameters>**
 
 Creates a process snapshot and populates binary metadata for all mapped files.
+Also captures per-thread state (wchan, syscall, name, stack bounds) when possible.
 
 parameters:
     [ --rootfs | -R <rootfs> ]
@@ -103,6 +104,7 @@ parameters:
     [ --maps | -m <process-maps-file> ]
     [ --pid | -p <running-process-pid> ]
     [ --coredump | -C <coredump-file> ]
+    [ --gdb-dump | -G <gdb-output-file> ]  - output of "gdb -batch -ex 'thread apply all bt full' -ex 'info registers'"
 
 
 **decode-backtrace <parameters>**
@@ -156,3 +158,103 @@ parameters:
     [ --maps | -m <process-maps-file> ]
     [ --pid | -p <running-process-pid> ]
     [ --coredump | -C <coredump-file> ]
+
+
+**analyse-deadlock <parameters>**
+
+Detect deadlocks in a previously loaded process snapshot.
+Uses 3-tier evidence degradation: certain (futex syscall / GDB mutex graph) →
+probable (pthread_mutex_lock in backtrace) → possible (wchan=futex_wait).
+
+parameters:
+    --snapshot-id | -s <id>              - ID of ProcessSnapshot to analyse
+    [ --lock-state | -L <file> ]         - output of GDB find_deadlock command
+                                           (BALDRICK_LOCK_STATE_BEGIN … END format)
+    [ --json ]                           - emit JSON instead of Rich table
+
+Output shows evidence level (certain / probable / possible / none), detected
+deadlock cycles with participating TIDs, and suspected threads with no cycle.
+
+Example — live process:
+    baldrick --db session.db load-process --pid 12345
+    baldrick --db session.db analyse-deadlock --snapshot-id 1
+
+Example — with exact mutex ownership (GDB find_deadlock extension):
+    gdb -batch \
+        -ex "source tests/gdb-scripts/_gdb/find_deadlock.py" \
+        -ex "find_deadlock" \
+        ./deadlock_test 12345 > lock.txt
+    baldrick --db session.db analyse-deadlock --snapshot-id 1 --lock-state lock.txt
+
+Note: GDB live attach requires ptrace_scope=0:
+    echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+
+
+**query <name> [key=value ...]**
+
+Run a built-in or user-defined SQL query against the database.
+Parameters are passed as positional `key=value` arguments after the query name.
+Inline SQL is run by passing `sql="SELECT ..."` as the first argument.
+
+Built-in queries:
+
+    snapshots                   List all process snapshots
+    mappings     id=N           Memory mappings for snapshot N
+    binaries                    All indexed binaries
+    symbols      binary=NAME    Symbols for a binary (by name)
+    sections     binary=NAME    Section headers for a binary
+    backtrace    id=N           Backtrace entries for snapshot N
+    libs         id=N           Shared libraries for snapshot N
+    rwx          id=N           RWX memory regions for snapshot N
+    process-binaries id=N       ProcessBinary records for snapshot N
+    threads      id=N           Threads for snapshot N
+    symbol-cache binary=NAME    Symbol cache entries for binary
+    symbol-cache-stats          Symbol cache hit counts per binary
+    deadlock-threads id=N       Threads likely blocked on a futex/mutex
+
+parameters:
+    <name>                      - built-in query name, 'list', or first arg as sql=...
+    [key=value ...]             - bind query parameters (positional, repeatable)
+    [ --param | -p key=value ]  - alternative to positional key=value (backward compat)
+    [ --tag | -T <tag> ]        - filter snapshots by tag
+    [ --format | -f rich|json|csv ] - output format (default: rich)
+
+Examples:
+    baldrick --db session.db query list
+    baldrick --db session.db query threads id=1
+    baldrick --db session.db query deadlock-threads id=1
+    baldrick --db session.db query symbols binary=libc.so.6 --format csv
+    baldrick --db session.db query 'sql="SELECT tid, wchan FROM thread WHERE process_id=1"'
+
+
+**schema**
+
+Print the database schema (all tables, columns, and types).
+
+    baldrick --db session.db schema
+
+
+## Aliases
+
+Baldrick supports command aliases in `~/.baldrick.toml` (user-level) and
+`./baldrick.toml` (local, takes priority). Syntax mirrors gitconfig aliases.
+
+```toml
+[alias]
+dl   = "analyse-deadlock"
+dls  = "analyse-deadlock --snapshot-id"
+qt   = "query threads"
+qdl  = "query deadlock-threads"
+snap = "query snapshots"
+```
+
+Usage:
+
+    baldrick --db session.db dl --snapshot-id 1
+    baldrick --db session.db dls 1
+    baldrick --db session.db qt id=1
+    baldrick --db session.db qdl id=1
+
+Aliases are expanded before any flag parsing — extra arguments after the alias
+are appended verbatim, exactly like git aliases. One level of expansion only
+(aliases cannot reference other aliases).

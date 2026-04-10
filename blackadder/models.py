@@ -161,6 +161,27 @@ class BinaryLocator(SQLModel, table=True):
 # ============================================================================
 
 
+class Thread(SQLModel, table=True):
+    """
+    A thread within a process snapshot.
+
+    Populated from /proc/PID/task/TID/ (live) or GDB thread dump (offline).
+    stack_start/stack_end are derived from [stack:TID] mappings in /proc/maps.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    process_id: int = Field(foreign_key="processsnapshot.id", index=True)
+    tid: int                            # Thread ID (LWP)
+    name: str | None = None             # Thread name from /proc/PID/task/TID/comm
+    wchan: str | None = None            # Kernel wait channel (/proc/PID/task/TID/wchan)
+    syscall: str | None = None          # Current syscall + args, raw text
+    stack_start: int | None = None      # Stack region start address
+    stack_end: int | None = None        # Stack region end address
+
+    # Relationships
+    process: "ProcessSnapshot" = Relationship(back_populates="threads")
+
+
 class ProcessSnapshot(SQLModel, table=True):
     """
     Represents a process at a point in time (live or core dump).
@@ -182,6 +203,7 @@ class ProcessSnapshot(SQLModel, table=True):
     mappings: list["MemoryMapping"] = Relationship(back_populates="process")
     process_binaries: list["ProcessBinary"] = Relationship(back_populates="process")
     register_state: Optional["ProcessRegisterState"] = Relationship(back_populates="process")
+    threads: list["Thread"] = Relationship(back_populates="process")
 
 
 class MemoryMapping(SQLModel, table=True):
@@ -242,6 +264,7 @@ class BacktraceEntry(SQLModel, table=True):
     resolved_file: str | None = Field(default=None, max_length=512)  # "src/file.c"
     resolved_line: int | None = None
     match_confidence: float = Field(default=1.0)  # 0.0-1.0 for fuzzy matches
+    thread_id: int | None = Field(default=None, foreign_key="thread.id", index=True)  # None for single-thread
 
 
 # ============================================================================
@@ -267,37 +290,28 @@ class MemoryRegionType(str, Enum):
 
 class ProcessRegisterState(SQLModel, table=True):
     """
-    CPU register state from core dump PT_NOTE sections (Phase 2.3).
+    CPU register state — architecture-agnostic, stored as JSON.
 
-    Stores x86-64 general purpose and special registers from core dump.
+    Supports any architecture (x86-64, ARM64, ARM32, RISC-V, ...).
+    Populated from core dump PT_NOTE sections or GDB 'info registers' output.
+
+    registers_json: JSON object mapping register name → integer value, e.g.:
+        {"rip": 4198908, "rsp": 140737488347120, "rax": 0, ...}   # x86-64
+        {"pc": 4198908, "sp": 140737488347120, "x0": 0, ...}      # ARM64
+
+    thread_id: optional FK to Thread — None means "main thread / unknown".
     """
 
     id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
+    thread_id: int | None = Field(default=None, foreign_key="thread.id", index=True)
 
-    # General purpose registers (x86-64)
-    rax: int | None = None
-    rbx: int | None = None
-    rcx: int | None = None
-    rdx: int | None = None
-    rsi: int | None = None
-    rdi: int | None = None
-    rbp: int | None = None  # Frame pointer
-    rsp: int | None = None  # Stack pointer
-    rip: int | None = None  # Instruction pointer (crash location)
+    # Architecture identifier, e.g. "x86_64", "arm64", "arm", "riscv64"
+    # Detected from ELF e_machine or left as None when unknown.
+    arch: str | None = None
 
-    # Extended registers
-    r8: int | None = None
-    r9: int | None = None
-    r10: int | None = None
-    r11: int | None = None
-    r12: int | None = None
-    r13: int | None = None
-    r14: int | None = None
-    r15: int | None = None
-
-    # Flags
-    eflags: int | None = None
+    # All registers as JSON: {"reg_name": int_value, ...}
+    registers_json: str = Field(default="{}")
 
     # Relationships
     process: ProcessSnapshot = Relationship(back_populates="register_state")

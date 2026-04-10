@@ -117,6 +117,15 @@ BUILTIN_QUERIES: list[QueryDef] = [
         params=["id"],
     ),
     QueryDef(
+        name="threads",
+        sql=(
+            "SELECT tid, name, wchan, syscall, stack_start, stack_end "
+            "FROM thread WHERE process_id = :id ORDER BY tid"
+        ),
+        description="Threads in a process snapshot with kernel wait info",
+        params=["id"],
+    ),
+    QueryDef(
         name="symbol-cache",
         sql=(
             "SELECT sc.offset, sc.symbol, sc.source_file, sc.source_line, b.name AS binary_name "
@@ -127,6 +136,20 @@ BUILTIN_QUERIES: list[QueryDef] = [
         ),
         description="Persistent symbol cache entries for a binary",
         params=["binary"],
+    ),
+    QueryDef(
+        name="deadlock-threads",
+        sql=(
+            "SELECT t.tid, t.name, t.wchan, t.syscall, COUNT(b.id) AS frame_count "
+            "FROM thread t "
+            "LEFT JOIN backtrace_entry b ON b.thread_id = t.id "
+            "WHERE t.process_id = :id "
+            "  AND (t.wchan LIKE '%futex%' OR t.wchan LIKE '%mutex%' OR t.syscall LIKE '202 %' OR t.syscall LIKE '240 %' OR t.syscall LIKE '98 %') "
+            "GROUP BY t.id "
+            "ORDER BY t.tid"
+        ),
+        description="Threads in snapshot likely blocked on a mutex/futex (deadlock candidates)",
+        params=["id"],
     ),
     QueryDef(
         name="symbol-cache-stats",
@@ -195,3 +218,99 @@ def load_query_registry() -> dict[str, QueryDef]:
         registry.update(_load_toml_queries(local_toml))
 
     return registry
+
+
+# ============================================================================
+# Alias loading
+# ============================================================================
+
+
+def _load_toml_aliases(path: Path) -> dict[str, list[str]]:
+    """
+    Parse [alias] section from a baldrick.toml file.
+
+    Each alias value is a string command (like gitconfig: alias.ci = commit -a)
+    split into a list of tokens.
+
+    Example baldrick.toml:
+        [alias]
+        dl = "analyse-deadlock"
+        dls = "analyse-deadlock --snapshot-id"
+        qt = "query threads --param"
+    """
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        import warnings
+        warnings.warn(f"Could not parse {path}: {e}", stacklevel=2)
+        return {}
+
+    result: dict[str, list[str]] = {}
+    for name, value in data.get("alias", {}).items():
+        if isinstance(value, str):
+            import shlex
+            result[name] = shlex.split(value)
+        elif isinstance(value, list):
+            result[name] = [str(t) for t in value]
+    return result
+
+
+def load_aliases() -> dict[str, list[str]]:
+    """
+    Build alias map from ~/.baldrick.toml and ./baldrick.toml.
+
+    Local overrides user-level (same priority as queries).
+    """
+    aliases: dict[str, list[str]] = {}
+
+    user_toml = Path.home() / ".baldrick.toml"
+    aliases.update(_load_toml_aliases(user_toml))
+
+    local_toml = Path.cwd() / "baldrick.toml"
+    if local_toml != user_toml:
+        aliases.update(_load_toml_aliases(local_toml))
+
+    return aliases
+
+
+def expand_aliases(argv: list[str]) -> list[str]:
+    """
+    Expand a single alias at the first non-option argument position.
+
+    Only one level of expansion (no recursive aliases).
+    Mirrors git behaviour: baldrick <alias> [extra args]
+
+    Args:
+        argv: sys.argv[1:] — args after the program name
+
+    Returns:
+        Expanded argument list, or original if no alias matched.
+    """
+    aliases = load_aliases()
+    if not argv:
+        return argv
+
+    # Global baldrick flags that consume the next token (value flags).
+    # Boolean flags (--debug) do not consume next token.
+    _VALUE_FLAGS = frozenset({"--db", "-d", "--log-level", "--log-file"})
+
+    # Find first positional arg, skipping global flag tokens.
+    skip_next = False
+    for i, arg in enumerate(argv):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg.startswith("-"):
+            # Flag with embedded = never consumes next token
+            if "=" not in arg and arg in _VALUE_FLAGS:
+                skip_next = True
+            continue
+        if arg in aliases:
+            expansion = aliases[arg]
+            return argv[:i] + expansion + argv[i + 1:]
+        break  # first non-flag arg is not an alias
+
+    return argv

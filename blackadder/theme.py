@@ -106,6 +106,11 @@ COLUMN_TYPE_MAP: dict[str, str] = {
     "mtime": "meta",
     "created_at": "meta",
     "md5sum": "meta",
+    "tid": "meta",
+    "wchan": "description",
+    "syscall": "flags",
+    "stack_start": "address",
+    "stack_end": "address",
     "dev": "meta",
     # description / text
     "description": "description",

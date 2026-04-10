@@ -20,12 +20,15 @@ from blackadder.exceptions import (
     ValidationError,
 )
 from blackadder.models import (
+    BacktraceEntry,
     Binary,
     MemoryMapping,
     ProcessBinary,
+    ProcessRegisterState,
     ProcessSnapshot,
     ResolvedFrame,
     SymbolCache,
+    Thread,
 )
 
 from .base import AsyncDatabaseManager
@@ -176,8 +179,103 @@ class ProcessDatabase:
             result = await session.execute(statement)  # type: ignore
             process = result.scalars().first()
 
+        # Load thread info from /proc/PID/task/ if pid is available
+        if pid is not None:
+            await self._load_threads(process_id, pid, process.mappings)
+
         await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
         return process
+
+    async def _load_threads(
+        self,
+        process_id: int,
+        pid: int,
+        mappings: list[MemoryMapping],
+    ) -> None:
+        """
+        Load thread info from /proc/PID/task/ and persist Thread records.
+
+        Reads per-thread: TID, name (comm), wchan, syscall.
+        Maps [stack:TID] entries from memory mappings to thread stack ranges.
+        Silently skips if /proc/PID/task/ is not accessible (process exited, permission denied).
+
+        Args:
+            process_id: ProcessSnapshot.id
+            pid:        OS process ID
+            mappings:   Already-loaded MemoryMapping list (for stack range lookup)
+        """
+        task_dir = Path(f"/proc/{pid}/task")
+        if not task_dir.exists():
+            logger.debug("task_dir_not_found", extra={"pid": pid})
+            return
+
+        # Build stack range map from mappings: TID → (start, end)
+        # /proc/maps shows "[stack:TID]" for thread stacks on older kernels,
+        # and "[stack]" only for main thread on newer kernels.
+        stack_ranges: dict[int, tuple[int, int]] = {}
+        main_stack: tuple[int, int] | None = None
+        for m in mappings:
+            if m.pathname.startswith("[stack:"):
+                try:
+                    tid = int(m.pathname[7:-1])
+                    stack_ranges[tid] = (m.start_addr, m.end_addr)
+                except ValueError:
+                    pass
+            elif m.pathname == "[stack]":
+                main_stack = (m.start_addr, m.end_addr)
+
+        threads: list[Thread] = []
+        try:
+            tids = [int(t.name) for t in task_dir.iterdir() if t.name.isdigit()]
+        except PermissionError:
+            logger.debug("task_dir_permission_denied", extra={"pid": pid})
+            return
+
+        for tid in sorted(tids):
+            name = wchan = syscall = None
+            try:
+                comm_path = task_dir / str(tid) / "comm"
+                if comm_path.exists():
+                    name = comm_path.read_text().strip()
+            except OSError:
+                pass
+            try:
+                wchan_path = task_dir / str(tid) / "wchan"
+                if wchan_path.exists():
+                    wchan = wchan_path.read_text().strip()
+            except OSError:
+                pass
+            try:
+                syscall_path = task_dir / str(tid) / "syscall"
+                if syscall_path.exists():
+                    syscall = syscall_path.read_text().strip()
+            except OSError:
+                pass
+
+            # Stack range: prefer [stack:TID], fall back to [stack] for main thread
+            stack_range = stack_ranges.get(tid) or (main_stack if tid == pid else None)
+            stack_start = stack_range[0] if stack_range else None
+            stack_end = stack_range[1] if stack_range else None
+
+            threads.append(Thread(
+                process_id=process_id,
+                tid=tid,
+                name=name,
+                wchan=wchan,
+                syscall=syscall,
+                stack_start=stack_start,
+                stack_end=stack_end,
+            ))
+
+        if not threads:
+            return
+
+        async with self.manager.get_session() as session:
+            for t in threads:
+                session.add(t)
+            await session.commit()
+
+        logger.info("threads_loaded", extra={"pid": pid, "thread_count": len(threads), "process_id": process_id})
 
     async def address_to_binary(
         self, pid: int, addr: int
@@ -454,6 +552,141 @@ class ProcessDatabase:
                     await session.commit()
         except Exception as e:
             logger.debug("symbol_cache_persist_failed", extra={"binary_id": binary_id, "offset": offset, "error": str(e)})
+
+    async def load_gdb_dump(self, process_id: int, gdb_text: str) -> int:
+        """
+        Parse a GDB text dump and persist threads + backtrace entries into DB.
+
+        Intended to enrich an existing ProcessSnapshot (created via load_maps or
+        load_core_dump) with per-thread backtraces and register state from GDB.
+
+        For each GDB thread:
+        - Creates or updates a Thread record (matched by TID if already exists)
+        - Creates BacktraceEntry records linked to that Thread
+        - Stores register state in ProcessRegisterState (one per thread via thread_id)
+
+        Args:
+            process_id: ProcessSnapshot.id to attach threads to
+            gdb_text:   Raw GDB stdout from 'thread apply all bt full' + 'info registers'
+
+        Returns:
+            Number of threads parsed
+        """
+        from blackadder.binutils.gdb_dump import parse_gdb_dump
+
+        dump = parse_gdb_dump(gdb_text)
+        if not dump.threads:
+            logger.warning("gdb_dump_no_threads", extra={"process_id": process_id})
+            return 0
+
+        async with self.manager.get_session() as session:
+            for gdb_thread in dump.threads:
+                # Find existing Thread by TID or create new one
+                existing_stmt = select(Thread).where(
+                    (Thread.process_id == process_id)
+                    & (Thread.tid == gdb_thread.tid)
+                )
+                result = await session.execute(existing_stmt)  # type: ignore
+                thread = result.scalars().first()
+
+                if thread is None:
+                    thread = Thread(
+                        process_id=process_id,
+                        tid=gdb_thread.tid,
+                        name=gdb_thread.name,
+                    )
+                    session.add(thread)
+                    await session.flush()  # get thread.id
+                elif gdb_thread.name and not thread.name:
+                    thread.name = gdb_thread.name
+                    session.add(thread)
+                    await session.flush()
+
+                # BacktraceEntry records for this thread
+                for frame in gdb_thread.frames:
+                    entry = BacktraceEntry(
+                        process_id=process_id,
+                        frame_num=frame.frame_num,
+                        address=frame.address or 0,
+                        resolved_symbol=frame.symbol or "???",
+                        resolved_file=frame.source_file,
+                        resolved_line=frame.source_line,
+                        thread_id=thread.id,
+                    )
+                    session.add(entry)
+
+                # Register state — stored as architecture-agnostic JSON
+                if gdb_thread.registers:
+                    import json
+                    reg_state = ProcessRegisterState(
+                        process_id=process_id,
+                        thread_id=thread.id,
+                        registers_json=json.dumps(gdb_thread.registers),
+                    )
+                    session.add(reg_state)
+
+            await session.commit()
+
+        logger.info(
+            "gdb_dump_loaded",
+            extra={"process_id": process_id, "thread_count": len(dump.threads)},
+        )
+        return len(dump.threads)
+
+    async def get_deadlock_report(self, process_id: int, lock_state_text: str | None = None):
+        """
+        Analyze threads of a process snapshot for deadlocks.
+
+        Loads Thread records and per-thread BacktraceEntry records from the DB,
+        then delegates to DeadlockAnalyzer.
+
+        Args:
+            process_id:       ProcessSnapshot.id
+            lock_state_text:  Optional raw output from GDB find_deadlock command.
+                              When provided, enables Tier 0 analysis with exact
+                              mutex ownership (evidence_level=certain).
+
+        Returns:
+            DeadlockReport dataclass
+        """
+        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from blackadder.binutils.gdb_dump import parse_lock_state
+
+        async with self.manager.get_session() as session:
+            # Load threads
+            thread_stmt = select(Thread).where(Thread.process_id == process_id)
+            thread_result = await session.execute(thread_stmt)  # type: ignore
+            threads = thread_result.scalars().all()
+
+            # Load backtrace entries per thread
+            bt_stmt = select(BacktraceEntry).where(
+                BacktraceEntry.process_id == process_id
+            )
+            bt_result = await session.execute(bt_stmt)  # type: ignore
+            entries = bt_result.scalars().all()
+
+        # Group backtrace symbols by thread.id (DB PK)
+        backtraces: dict[int, list[str]] = {}
+        for entry in entries:
+            if entry.thread_id is not None:
+                backtraces.setdefault(entry.thread_id, []).append(entry.resolved_symbol)
+
+        # Convert Thread ORM objects to plain dicts for the analyzer
+        thread_dicts = [
+            {
+                "id": t.id,
+                "tid": t.tid,
+                "name": t.name,
+                "wchan": t.wchan,
+                "syscall": t.syscall,
+                "stack_start": t.stack_start,
+                "stack_end": t.stack_end,
+            }
+            for t in threads
+        ]
+
+        lock_state = parse_lock_state(lock_state_text) if lock_state_text else None
+        return DeadlockAnalyzer(thread_dicts, backtraces, lock_state=lock_state).analyze()
 
     async def analyze_memory_layout(
         self,

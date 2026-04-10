@@ -316,6 +316,11 @@ async def load_process(
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
+    gdb_dump_file: str | None = typer.Option(
+        None, "--gdb-dump", "-G",
+        help="Path to GDB text dump (output of 'thread apply all bt full' + 'info registers'). "
+             "Can be combined with --coredump or --maps to add thread backtraces and registers.",
+    ),
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
     debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
     tag: str | None = typer.Option(None, "--tag", "-T", help="Human-readable label for this snapshot"),
@@ -324,16 +329,19 @@ async def load_process(
     Load process memory mappings into the database.
 
     Accepts /proc/maps, a live PID, or an ELF core dump as input.
+    Optionally enrich with a GDB text dump (thread backtraces + registers).
     Also extracts and stores binary metadata (sections, symbols) for all mapped files.
 
     Example:
         baldrick load-process --maps /proc/12345/maps --pid 12345
         baldrick load-process --pid 12345
         baldrick load-process --coredump core.dump
+        baldrick load-process --coredump core.dump --gdb-dump threads.txt
+        baldrick load-process --gdb-dump threads.txt   # offline, backtrace only
     """
-    sources = [maps_file, pid, core_file]
+    sources = [maps_file, pid, core_file, gdb_dump_file]
     if not any(s is not None for s in sources):
-        console.print("[red]Error: Specify --maps, --pid, or --coredump[/red]")
+        console.print("[red]Error: Specify --maps, --pid, --coredump, or --gdb-dump[/red]")
         raise typer.Exit(1)
 
     config = _get_config_or_default()
@@ -374,6 +382,16 @@ async def load_process(
 
             console.print(f"[blue]Loading memory mappings...[/blue]")
             process = await db_proc.load_maps(pid, maps_text, rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag)
+
+        # Process GDB dump — enrich snapshot with thread backtraces + registers
+        if gdb_dump_file:
+            gdb_path = Path(gdb_dump_file)
+            if not gdb_path.exists():
+                console.print(f"[red]Error: GDB dump file not found: {gdb_dump_file}[/red]")
+                raise typer.Exit(1)
+            gdb_text = gdb_path.read_text(errors="replace")
+            console.print(f"[blue]Parsing GDB dump from {gdb_dump_file}...[/blue]")
+            await db_proc.load_gdb_dump(process.id, gdb_text)
 
         # Build section lookup and collect debug_file info in one DB pass
         from blackadder.models import BinaryLocator
@@ -458,6 +476,35 @@ async def load_process(
             for bin_path in sorted(debug_file_map):
                 dbg_table.add_row(bin_path, debug_file_map[bin_path])
             console.print(dbg_table)
+
+        # Show threads table if threads were loaded
+        from blackadder.models import Thread as ThreadModel
+        from sqlmodel import select as sqlmodel_select
+        async with proc_manager.get_session() as _sess:
+            _result = await _sess.execute(  # type: ignore
+                sqlmodel_select(ThreadModel).where(ThreadModel.process_id == process.id).order_by(ThreadModel.tid)
+            )
+            db_threads = _result.scalars().all()
+
+        if db_threads:
+            console.print()
+            thr_table = Table(title="Threads")
+            thr_table.add_column("TID", style=_theme.meta, no_wrap=True)
+            thr_table.add_column("Name", style=_theme.symbol, no_wrap=True)
+            thr_table.add_column("Wait (wchan)", style=_theme.description)
+            thr_table.add_column("Syscall", style=_theme.flags)
+            thr_table.add_column("Stack start", style=_theme.address, no_wrap=True)
+            thr_table.add_column("Stack end", style=_theme.address, no_wrap=True)
+            for t in db_threads:
+                thr_table.add_row(
+                    str(t.tid),
+                    t.name or "—",
+                    t.wchan or "—",
+                    (t.syscall or "—")[:40],
+                    f"{t.stack_start:#x}" if t.stack_start else "—",
+                    f"{t.stack_end:#x}" if t.stack_end else "—",
+                )
+            console.print(thr_table)
 
         await proc_manager.close()
 
@@ -801,6 +848,119 @@ async def analyse_memory(
 
 
 @app.command()
+async def analyse_deadlock(
+    snapshot_id: int = typer.Option(..., "--snapshot-id", "-s", help="ProcessSnapshot ID to analyze"),
+    lock_state_file: str | None = typer.Option(
+        None, "--lock-state", "-L",
+        help="Path to find_deadlock GDB output (enables exact mutex ownership analysis)",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Output as JSON instead of Rich tables"),
+) -> None:
+    """
+    Analyze threads of a process snapshot for deadlocks.
+
+    Detects deadlocks with three evidence levels:
+      certain  — mutex ownership known (from --lock-state GDB output, or futex syscall)
+      probable — pthread_mutex_lock / __lll_lock_wait in backtrace
+      possible — wchan shows futex wait, multiple blocked threads
+
+    For highest accuracy provide GDB lock state:
+        gdb -batch -ex "source _gdb/find_deadlock.py" -ex find_deadlock ./binary core \\
+          > lock.json
+        baldrick --db session.db analyse-deadlock -s 1 --lock-state lock.json
+
+    Example:
+        baldrick --db session.db analyse-deadlock --snapshot-id 1
+        baldrick --db session.db analyse-deadlock -s 1 --lock-state lock.json
+        baldrick --db session.db analyse-deadlock -s 1 --json
+    """
+    config = _get_config_or_default()
+
+    try:
+        manager = _db_manager(_global_db, config)
+        await manager.create_all()
+        db_proc = ProcessDatabase(manager, config)
+
+        lock_state_text: str | None = None
+        if lock_state_file:
+            ls_path = Path(lock_state_file)
+            if not ls_path.exists():
+                console.print(f"[red]Error: lock state file not found: {lock_state_file}[/red]")
+                raise typer.Exit(1)
+            lock_state_text = ls_path.read_text(errors="replace")
+
+        report = await db_proc.get_deadlock_report(snapshot_id, lock_state_text=lock_state_text)
+        await manager.close()
+
+        if output_json:
+            import json
+            from dataclasses import asdict
+            console.print(json.dumps(asdict(report), indent=2))
+            return
+
+        # ── Header ────────────────────────────────────────────────────────────
+        level_color = {
+            "certain": "red",
+            "probable": "yellow",
+            "possible": "cyan",
+            "none": "green",
+        }.get(report.evidence_level, "white")
+
+        console.print()
+        console.print(
+            f"[bold]Deadlock Analysis[/bold] — snapshot [cyan]#{snapshot_id}[/cyan]"
+            f"  Evidence: [{level_color}]{report.evidence_level}[/{level_color}]"
+        )
+
+        if report.evidence_level == "none":
+            console.print("[green]✓ No blocked threads detected.[/green]")
+            return
+
+        # ── Cycles ────────────────────────────────────────────────────────────
+        if report.cycles:
+            for i, cycle in enumerate(report.cycles, 1):
+                lvl_color = {
+                    "certain": "red", "probable": "yellow", "possible": "cyan",
+                }.get(cycle.evidence_level, "white")
+                console.print()
+                console.print(
+                    f"[bold][{lvl_color}][CYCLE {i}][/{lvl_color}][/bold] "
+                    f"({cycle.evidence_level}): "
+                    + " → ".join(f"TID {t}" for t in cycle.tids)
+                    + (f" → TID {cycle.tids[0]}" if len(cycle.tids) > 1 else "")
+                )
+                console.print(f"  {cycle.description}")
+
+        # ── Suspected (blocked but no cycle) ─────────────────────────────────
+        if report.suspected_threads:
+            console.print()
+            sus_table = Table(title="Suspected Blocked Threads", show_header=True)
+            sus_table.add_column("TID", style=_theme.meta, no_wrap=True)
+            sus_table.add_column("Name", style=_theme.symbol)
+            sus_table.add_column("Evidence", style=_theme.flags)
+            sus_table.add_column("Waiting for", style=_theme.address)
+            for dt in report.suspected_threads:
+                sus_table.add_row(
+                    str(dt.tid),
+                    dt.name or "—",
+                    dt.evidence,
+                    f"{dt.waiting_for:#x}" if dt.waiting_for else "—",
+                )
+            console.print(sus_table)
+
+        # ── Summary ───────────────────────────────────────────────────────────
+        if report.summary:
+            console.print()
+            console.print(f"[dim]{report.summary}[/dim]")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 async def tag(
     snapshot_id: int = typer.Argument(help="Snapshot ID to tag"),
     new_tag: str = typer.Argument(help="New tag value (empty string to remove)"),
@@ -849,38 +1009,62 @@ async def tag(
 
 @app.command()
 def query(
-    name: str = typer.Argument(help="Query name, 'list' to show all queries, or 'sql' to run inline SQL"),
+    args: list[str] = typer.Argument(
+        default=None,
+        help=(
+            "Query name followed by optional key=value params. "
+            "Use 'list' to show all queries. "
+            "Use sql=\"SELECT ...\" to run inline SQL. "
+            "Examples: query threads id=1 | query sql=\"SELECT * FROM processsnapshot\""
+        ),
+    ),
     param: list[str] = typer.Option(
-        [], "--param", "-p", help="Query parameter as key=value (can be repeated)"
+        [], "--param", "-p", help="Query parameter as key=value (can be repeated; alternative to positional key=value)"
     ),
     tag: str | None = typer.Option(None, "--tag", "-T", help="Filter snapshots by tag"),
     fmt: str = typer.Option(
         "rich", "--format", "-f", help="Output format: rich, json, csv"
     ),
-    sql: str | None = typer.Option(
-        None, "--sql", "-s", help="Inline SQL to execute (used with 'sql' subcommand)"
-    ),
 ) -> None:
     """
     Run a named SQL query against the database.
 
-    Use 'list' to show all available queries. Parameters are passed as --param key=value.
-    For snapshot queries use --param id=N or --tag <tag> to select the snapshot.
-    Use 'sql' with --sql to run arbitrary SQL directly.
+    Parameters can be passed as positional key=value arguments after the query name.
+    Inline SQL is run by passing sql="SELECT ..." as the first argument.
 
-    Example:
+    Examples:
         baldrick --db session.db query list
         baldrick --db session.db query snapshots
         baldrick --db session.db query snapshots --tag crash-2026
-        baldrick --db session.db query mappings --param id=1
+        baldrick --db session.db query mappings id=1
+        baldrick --db session.db query threads id=1
         baldrick --db session.db query libs --tag crash-2026
-        baldrick --db session.db query symbols --param binary=libc.so.6 --format csv
-        baldrick --db session.db query sql --sql "SELECT id, pid, tag FROM processsnapshot"
+        baldrick --db session.db query symbols binary=libc.so.6 --format csv
+        baldrick --db session.db query 'sql="SELECT id, pid, tag FROM processsnapshot"'
     """
     from blackadder.queries import load_query_registry
     from blackadder.query import BlackadderQuery, _db_path, run_query
 
     registry = load_query_registry()
+
+    if not args:
+        console.print("[red]Query name required. Use 'list' to show available queries.[/red]")
+        raise typer.Exit(1)
+
+    # Split args into: name, positional key=value pairs
+    # First arg is either the query name or sql="..."
+    first = args[0]
+    rest = args[1:]
+
+    # Detect inline SQL: sql="SELECT ..." or sql=SELECT... (first arg starts with sql=)
+    inline_sql: str | None = None
+    name: str
+    if first.startswith("sql="):
+        inline_sql = first[4:].strip().strip('"').strip("'")
+        # Any remaining args are ignored for inline SQL
+        name = "sql"
+    else:
+        name = first
 
     if name == "list":
         table = Table(title="Available Queries")
@@ -908,11 +1092,11 @@ def query(
 
     # Inline SQL mode
     if name == "sql":
-        if not sql:
-            console.print("[red]--sql <SQL> is required when using 'sql' subcommand[/red]")
+        if not inline_sql:
+            console.print("[red]sql=<SQL> is required when using inline SQL. Example: query 'sql=\"SELECT * FROM processsnapshot\"'[/red]")
             raise typer.Exit(1)
         try:
-            df = run_query(db_file, sql)
+            df = run_query(db_file, inline_sql)
         except Exception as e:
             console.print(f"[red]Query failed: {e}[/red]")
             raise typer.Exit(1)
@@ -922,11 +1106,11 @@ def query(
             console.print(f"[red]Unknown query: {name!r}. Use 'list' to see available queries.[/red]")
             raise typer.Exit(1)
 
-        # Parse --param key=value pairs
+        # Collect params: positional key=value args + --param options
         params: dict[str, str] = {}
-        for kv in param:
+        for kv in list(rest) + list(param):
             if "=" not in kv:
-                console.print(f"[red]Invalid --param format: {kv!r} (expected key=value)[/red]")
+                console.print(f"[red]Invalid parameter: {kv!r} (expected key=value)[/red]")
                 raise typer.Exit(1)
             k, v = kv.split("=", 1)
             params[k.strip()] = v.strip()
@@ -1045,6 +1229,9 @@ def main():
     import asyncio
     import click
     import os
+
+    from blackadder.queries import expand_aliases
+    sys.argv[1:] = expand_aliases(sys.argv[1:])
 
     result = app(standalone_mode=False)
     if asyncio.iscoroutine(result):
