@@ -9,9 +9,34 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+import struct
+
 from pydantic import BaseModel, field_validator
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
+
+_INT64_MAX = (1 << 63) - 1
+_UINT64_MASK = (1 << 64) - 1
+
+
+def addr_to_db(addr: int) -> int:
+    """
+    Convert an unsigned 64-bit address to a signed 64-bit integer for SQLite storage.
+
+    SQLite INTEGER is signed 64-bit. Linux kernel addresses (0xffff...) exceed
+    INT64_MAX and must be reinterpreted as signed to avoid overflow errors.
+    Python's arbitrary-precision int transparently undoes this on read.
+    """
+    if addr > _INT64_MAX:
+        return addr - (1 << 64)
+    return addr
+
+
+def addr_from_db(val: int) -> int:
+    """Recover unsigned address from signed DB value."""
+    if val < 0:
+        return val + (1 << 64)
+    return val
 
 # ============================================================================
 # Pydantic models for validation and API
@@ -189,15 +214,18 @@ class ProcessSnapshot(SQLModel, table=True):
     Multiple analyses (backtraces, address resolutions) reference this.
     """
 
+    __table_args__ = (UniqueConstraint("tag", name="uq_processsnapshot_tag"),)
+
     id: int | None = Field(default=None, primary_key=True)
     pid: int | None = None  # None for offline/core dump analysis
     created_at: datetime = Field(default_factory=datetime.now)
     description: str = ""  # e.g., "core dump from crash at 2026-04-06 14:30:00"
-    tag: str | None = Field(default=None, index=True)  # Human-readable label
+    tag: str | None = Field(default=None)  # Human-readable label (UNIQUE, nullable)
 
-    # Phase 2.2: Core dump parsing support
-    source_type: str = Field(default="maps")  # "maps", "core_dump", "gdb_live"
-    source_path: str | None = None  # Path to core dump file if applicable
+    # Data source tracking
+    source_type: str = Field(default="maps")  # primary source: "maps", "core_dump", "gdb_dump"
+    source_path: str | None = None           # path to primary source file
+    sources_json: str = Field(default="[]")  # JSON array of all sources added via merge
 
     # Relationships
     mappings: list["MemoryMapping"] = Relationship(back_populates="process")
@@ -211,6 +239,9 @@ class MemoryMapping(SQLModel, table=True):
     Virtual memory mapping from /proc/PID/maps.
 
     Describes which binary is loaded at which address range.
+    Addresses are stored as signed 64-bit integers (SQLite INTEGER) via addr_to_db()
+    so that kernel-space addresses (0xffff...) which exceed INT64_MAX are handled
+    correctly. Use addr_from_db() to recover the original unsigned value for display.
     """
 
     id: int | None = Field(default=None, primary_key=True)

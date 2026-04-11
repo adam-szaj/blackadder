@@ -201,6 +201,9 @@ def format_value(col_name: str, value: Any, theme: ColorTheme) -> str:
         fmt_field = f"{type_name}_format"
         fmt = getattr(theme, fmt_field, None)
         if fmt == "hex":
+            # Recover unsigned address from signed DB storage
+            if value < 0:
+                value = value + (1 << 64)
             return f"{value:#x}"
         if fmt == "human" and type_name == "size":
             return _fmt_human(value)

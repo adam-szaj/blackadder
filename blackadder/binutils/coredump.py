@@ -131,7 +131,7 @@ class CoreDumpParser:
 
         elf_headers = self.parse_elf_headers(headers_output)
 
-        if elf_headers.get("type") != "ET_CORE":
+        if elf_headers.get("type") not in ("ET_CORE", "CORE"):
             logger.warning(
                 "not_a_core_dump",
                 extra={
@@ -142,7 +142,7 @@ class CoreDumpParser:
             return CoreDumpResult(
                 mappings=[],
                 status="not_core_dump",
-                reason=f"File type is {elf_headers.get('type')}, not ET_CORE",
+                reason=f"File type is {elf_headers.get('type')!r}, expected CORE or ET_CORE",
                 core_path=core_path,
             )
 
@@ -343,10 +343,11 @@ class CoreDumpParser:
             perms += "x" if "E" in flags else "-"
             perms += "p"  # Private (from core dump)
 
-            # Create mapping
+            # Create mapping — convert to signed 64-bit for SQLite INTEGER storage
+            from blackadder.models import addr_to_db
             mapping = {
-                "start_addr": vaddr,
-                "end_addr": vaddr + memsz,
+                "start_addr": addr_to_db(vaddr),
+                "end_addr": addr_to_db(vaddr + memsz),
                 "perms": perms,
                 "offset": header.get("offset", 0),
                 "pathname": "[core dump segment]",

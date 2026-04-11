@@ -26,7 +26,9 @@ from blackadder.logging_config import setup_logging
 from blackadder.theme import ColorTheme, column_style, format_value, load_theme
 
 app = typer.Typer(
-    help="Baldrick - Linux debugging tool for backtrace decoding and symbol resolution"
+    name="baldrick",
+    help="Baldrick - Linux debugging tool for backtrace decoding and symbol resolution",
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
 
@@ -73,6 +75,24 @@ def _to_db_url(path_or_url: str) -> str:
 
 def _db_manager(db: str | None, config: BlackadderConfig) -> AsyncDatabaseManager:
     return AsyncDatabaseManager(_to_db_url(db or config.db))
+
+
+async def _resolve_snapshot_id(
+    db_proc: "ProcessDatabase",
+    snapshot_id: int | None,
+) -> int:
+    """
+    Return snapshot_id as-is, or fall back to the latest snapshot in the DB.
+    Prints a dim hint when falling back. Exits with error if DB has no snapshots.
+    """
+    if snapshot_id is not None:
+        return snapshot_id
+    latest = await db_proc.get_latest_snapshot()
+    if latest is None:
+        console.print("[red]Error: No snapshots in database. Run load-process first.[/red]")
+        raise typer.Exit(1)
+    console.print(f"[dim]Using latest snapshot #{latest.id}[/dim]")
+    return latest.id  # type: ignore[return-value]
 
 
 def _parse_perm(perm_str: str) -> tuple[int, int]:
@@ -322,8 +342,29 @@ async def load_process(
              "Can be combined with --coredump or --maps to add thread backtraces and registers.",
     ),
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
-    debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
-    tag: str | None = typer.Option(None, "--tag", "-T", help="Human-readable label for this snapshot"),
+    debugfs: str | None = typer.Option(None,
+                                       "--debugfs",
+                                       "-D",
+                                       help="Path to debugfs"),
+    tag: str | None = typer.Option(
+        None, "--tag", "-T", help="Human-readable label for this snapshot"),
+    snapshot_id: int | None = typer.Option(
+        None,
+        "--snapshot-id",
+        "-s",
+        help="Merge data into this existing snapshot"),
+    update: bool = typer.Option(
+        False,
+        "--update",
+        "-u",
+        help="Allow updating/merging into an existing snapshot"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help=
+        "When merging with --tag, steal the tag from another snapshot if needed"
+    ),
 ) -> None:
     """
     Load process memory mappings into the database.
@@ -332,13 +373,19 @@ async def load_process(
     Optionally enrich with a GDB text dump (thread backtraces + registers).
     Also extracts and stores binary metadata (sections, symbols) for all mapped files.
 
+    When --tag or --snapshot-id point to an existing snapshot, use --update / -u
+    to merge new data into it instead of creating a new snapshot.
+
     Example:
-        baldrick load-process --maps /proc/12345/maps --pid 12345
         baldrick load-process --pid 12345
+        baldrick load-process --pid 12345 --tag myapp
         baldrick load-process --coredump core.dump
         baldrick load-process --coredump core.dump --gdb-dump threads.txt
-        baldrick load-process --gdb-dump threads.txt   # offline, backtrace only
+        baldrick load-process --snapshot-id 3 --gdb-dump threads.txt --update
+        baldrick load-process --tag myapp --gdb-dump threads.txt --update
     """
+    from blackadder.exceptions import DatabaseConstraintError, ProcessNotFoundError
+
     sources = [maps_file, pid, core_file, gdb_dump_file]
     if not any(s is not None for s in sources):
         console.print("[red]Error: Specify --maps, --pid, --coredump, or --gdb-dump[/red]")
@@ -351,47 +398,147 @@ async def load_process(
         await proc_manager.create_all()
         db_proc = ProcessDatabase(proc_manager, config)
 
-        if core_file:
-            core_path = Path(core_file)
-            if not core_path.exists():
-                console.print(f"[red]Error: core dump file not found: {core_file}[/red]")
+        # ── Resolve existing snapshot ────────────────────────────────────────
+        existing = None
+        try:
+            existing = await db_proc.resolve_snapshot(tag=tag,
+                                                      snapshot_id=snapshot_id)
+        except ProcessNotFoundError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+        except DatabaseConstraintError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            if not force:
                 raise typer.Exit(1)
+            # --force: re-resolve without raising, merge will steal the tag
+            existing = await db_proc.resolve_snapshot(tag=None,
+                                                      snapshot_id=snapshot_id)
 
-            console.print(f"[blue]Parsing core dump from {core_file}...[/blue]")
-            process = await db_proc.load_core_dump(str(core_path), rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag)
+        # ── Guard: update requires -u ────────────────────────────────────────
+        if existing is not None and not update:
+            hint = f"--snapshot-id {existing.id}"
+            if existing.tag:
+                hint += f"  (tag: {existing.tag!r})"
+            console.print(
+                f"[red]Error: Snapshot already exists ({hint}).\n"
+                f"Use --update / -u to merge new data into it.[/red]")
+            raise typer.Exit(1)
 
-        else:
+        # ── Read input files ─────────────────────────────────────────────────
+        maps_text: str | None = None
+        gdb_text: str | None = None
+
+        if maps_file or (pid and not core_file):
             if pid and not maps_file:
                 proc_maps_path = f"/proc/{pid}/maps"
                 try:
                     with open(proc_maps_path) as f:
                         maps_text = f.read()
                 except (FileNotFoundError, PermissionError) as e:
-                    console.print(f"[red]Error: Cannot read {proc_maps_path}: {e}[/red]")
+                    console.print(
+                        f"[red]Error: Cannot read {proc_maps_path}: {e}[/red]")
                     raise typer.Exit(1)
             elif maps_file:
                 maps_path = Path(maps_file)
                 if not maps_path.exists():
-                    console.print(f"[red]Error: maps file not found: {maps_file}[/red]")
+                    console.print(
+                        f"[red]Error: maps file not found: {maps_file}[/red]")
                     raise typer.Exit(1)
                 with open(maps_path) as f:
                     maps_text = f.read()
-            else:
-                console.print("[red]Error: Specify --maps, --pid, or --coredump[/red]")
-                raise typer.Exit(1)
 
-            console.print(f"[blue]Loading memory mappings...[/blue]")
-            process = await db_proc.load_maps(pid, maps_text, rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag)
-
-        # Process GDB dump — enrich snapshot with thread backtraces + registers
         if gdb_dump_file:
             gdb_path = Path(gdb_dump_file)
             if not gdb_path.exists():
-                console.print(f"[red]Error: GDB dump file not found: {gdb_dump_file}[/red]")
+                console.print(
+                    f"[red]Error: GDB dump file not found: {gdb_dump_file}[/red]"
+                )
                 raise typer.Exit(1)
             gdb_text = gdb_path.read_text(errors="replace")
-            console.print(f"[blue]Parsing GDB dump from {gdb_dump_file}...[/blue]")
-            await db_proc.load_gdb_dump(process.id, gdb_text)
+
+        # ── Create or merge ──────────────────────────────────────────────────
+        if existing is None:
+            # ── CREATE new snapshot ──────────────────────────────────────────
+            if core_file:
+                core_path = Path(core_file)
+                if not core_path.exists():
+                    console.print(
+                        f"[red]Error: core dump file not found: {core_file}[/red]"
+                    )
+                    raise typer.Exit(1)
+                console.print(
+                    f"[blue]Parsing core dump from {core_file}...[/blue]")
+                process = await db_proc.load_core_dump(str(core_path),
+                                                       rootfs=rootfs,
+                                                       debugfs=debugfs
+                                                       or rootfs,
+                                                       tag=tag)
+            elif maps_text is not None:
+                console.print("[blue]Loading memory mappings...[/blue]")
+                process = await db_proc.load_maps(pid,
+                                                  maps_text,
+                                                  rootfs=rootfs,
+                                                  debugfs=debugfs or rootfs,
+                                                  tag=tag)
+            else:
+                # gdb_dump only — create a minimal bare snapshot then load dump into it
+                from sqlalchemy.orm import selectinload as _sil
+                from sqlmodel import select as _sel
+
+                from blackadder.models import ProcessSnapshot as _PS
+                console.print(
+                    "[blue]Creating snapshot from GDB dump...[/blue]")
+                async with proc_manager.get_session() as _sess:
+                    _snap = _PS(pid=pid,
+                                description="GDB dump",
+                                source_type="gdb_dump",
+                                tag=tag)
+                    _sess.add(_snap)
+                    await _sess.commit()
+                    _snap_id = _snap.id
+                await db_proc.load_gdb_dump(_snap_id,
+                                            gdb_text)  # type: ignore[arg-type]
+                async with proc_manager.get_session() as _sess:
+                    _r = await _sess.execute(  # type: ignore
+                        _sel(_PS).where(_PS.id == _snap_id).options(
+                            _sil(_PS.mappings)))
+                    process = _r.scalars().first()
+                gdb_text = None  # already loaded above
+
+            # Enrich with GDB dump if also provided alongside core/maps
+            if gdb_text:
+                console.print(
+                    f"[blue]Parsing GDB dump from {gdb_dump_file}...[/blue]")
+                await db_proc.load_gdb_dump(process.id, gdb_text)
+
+            mode_label = "created"
+
+        else:
+            # ── MERGE into existing snapshot ─────────────────────────────────
+            console.print(
+                f"[blue]Merging into snapshot #{existing.id}...[/blue]")
+            if core_file:
+                core_path_str = str(Path(core_file).resolve())
+                if not Path(core_file).exists():
+                    console.print(
+                        f"[red]Error: core dump file not found: {core_file}[/red]"
+                    )
+                    raise typer.Exit(1)
+            else:
+                core_path_str = None
+
+            process = await db_proc.merge_into_snapshot(
+                existing,
+                pid=pid,
+                maps_text=maps_text,
+                core_path=core_path_str,
+                gdb_text=gdb_text,
+                rootfs=rootfs,
+                debugfs=debugfs or rootfs,
+                new_tag=tag,
+                force_tag=force,
+            )
+            mode_label = f"updated (merged into #{existing.id})"
 
         # Build section lookup and collect debug_file info in one DB pass
         from blackadder.models import BinaryLocator
@@ -451,6 +598,7 @@ async def load_process(
         pid_str = str(process.pid) if process.pid else "—"
         tag_str = f"  [dim](tag: {process.tag})[/dim]" if process.tag else ""
         summary.add_row("Snapshot ID", str(process.id))
+        summary.add_row("Mode", mode_label)
         summary.add_row("PID", f"{pid_str}{tag_str}")
         summary.add_row("Mappings", str(len(mappings)))
         summary.add_row("Total mapped", _fmt_size(total_size))
@@ -520,7 +668,7 @@ async def decode_backtrace(
     trace_file: str | None = typer.Option(
         None, "--trace", "-t", help="Backtrace file (default: stdin)"
     ),
-    pid: int = typer.Option(..., "--pid", "-p", help="Process snapshot ID"),
+    snapshot_id: int | None = typer.Option(None, "--snapshot-id", "-s", help="Process snapshot ID (default: latest)"),
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
     debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
     jobs: int = typer.Option(32, "--jobs", "-j", help="Max parallel symbol resolutions"),
@@ -534,8 +682,8 @@ async def decode_backtrace(
     - Kernel format ([<ffffffff81000001>] function+0x42/0x100)
 
     Example:
-        baldrick decode-backtrace --pid 1 --trace trace.txt
-        cat trace.txt | baldrick decode-backtrace --pid 1
+        baldrick decode-backtrace --snapshot-id 1 --trace trace.txt
+        cat trace.txt | baldrick decode-backtrace
     """
     config = _get_config_or_default()
     config.max_subprocess_workers = jobs
@@ -571,7 +719,8 @@ async def decode_backtrace(
 
         manager = _db_manager(_global_db, config)
         db_proc = ProcessDatabase(manager, config)
-        frames = await db_proc.decode_backtrace(pid, addresses)
+        snapshot_id = await _resolve_snapshot_id(db_proc, snapshot_id)
+        frames = await db_proc.decode_backtrace(snapshot_id, addresses)
 
         console.print()
         table = Table(title="Decoded Backtrace")
@@ -616,8 +765,8 @@ async def decode_address(
     unmapped: bool = typer.Option(
         False, "--unmapped", "-A", help="Addresses are offsets within a binary file"
     ),
-    pid: int | None = typer.Option(
-        None, "--pid", "-p", help="Process snapshot ID (for --mapped mode)"
+    snapshot_id: int | None = typer.Option(
+        None, "--snapshot-id", "-s", help="Process snapshot ID for --mapped mode (default: latest)"
     ),
     binary_file: str | None = typer.Option(
         None, "--binary", "-b", help="Binary file path (for --unmapped mode)"
@@ -631,15 +780,16 @@ async def decode_address(
     Resolve addresses to symbols and memory information.
 
     Two modes:
-      --mapped   [--pid N]    address is virtual (from process address space)
-      --unmapped --binary PATH address is an offset within the binary file
+      --mapped   [--snapshot-id N]  address is virtual (from process address space)
+      --unmapped --binary PATH      address is an offset within the binary file
 
     Multiple addresses can be passed as positional arguments.
+    If --snapshot-id is omitted in --mapped mode, the latest snapshot is used.
 
     Example:
-        baldrick decode-address --mapped --pid 1 -- 0x400a1c 0x400a2c
+        baldrick decode-address --mapped --snapshot-id 1 -- 0x400a1c 0x400a2c
         baldrick decode-address --unmapped --binary /lib/libc.so.6 -- 0x1c5c0
-        baldrick decode-address --mapped --pid 1 --full -- 0x400a1c
+        baldrick decode-address --mapped --snapshot-id 1 --full -- 0x400a1c
     """
     if not addresses:
         console.print("[red]Error: Provide at least one address[/red]")
@@ -654,10 +804,6 @@ async def decode_address(
 
     if mapped and unmapped:
         console.print("[red]Error: --mapped and --unmapped are mutually exclusive[/red]")
-        raise typer.Exit(1)
-
-    if mapped and pid is None:
-        console.print("[red]Error: --mapped requires --pid <snapshot-id>[/red]")
         raise typer.Exit(1)
 
     if unmapped and not binary_file:
@@ -689,9 +835,10 @@ async def decode_address(
 
         if mapped:
             db_proc = ProcessDatabase(shared_mgr, config)
+            snapshot_id = await _resolve_snapshot_id(db_proc, snapshot_id)
 
             for addr in parsed_addrs:
-                binary_info = await db_proc.address_to_binary(pid, addr)
+                binary_info = await db_proc.address_to_binary(snapshot_id, addr)
                 if not binary_info:
                     rows.append({"address": addr, "binary": "???", "offset": 0, "symbol": "???"})
                     continue
@@ -849,7 +996,7 @@ async def analyse_memory(
 
 @app.command()
 async def analyse_deadlock(
-    snapshot_id: int = typer.Option(..., "--snapshot-id", "-s", help="ProcessSnapshot ID to analyze"),
+    snapshot_id: int | None = typer.Option(None, "--snapshot-id", "-s", help="ProcessSnapshot ID to analyze (default: latest)"),
     lock_state_file: str | None = typer.Option(
         None, "--lock-state", "-L",
         help="Path to find_deadlock GDB output (enables exact mutex ownership analysis)",
@@ -880,6 +1027,8 @@ async def analyse_deadlock(
         manager = _db_manager(_global_db, config)
         await manager.create_all()
         db_proc = ProcessDatabase(manager, config)
+
+        snapshot_id = await _resolve_snapshot_id(db_proc, snapshot_id)
 
         lock_state_text: str | None = None
         if lock_state_file:
@@ -962,26 +1111,49 @@ async def analyse_deadlock(
 
 @app.command()
 async def tag(
-    snapshot_id: int = typer.Argument(help="Snapshot ID to tag"),
-    new_tag: str = typer.Argument(help="New tag value (empty string to remove)"),
+    args: list[str] = typer.Argument(default=None, help="[SNAPSHOT_ID] TAG  — snapshot ID is optional (default: latest)"),
 ) -> None:
     """
     Set or update the tag on an existing process snapshot.
 
-    Pass an empty string to remove the tag.
+    Pass an empty string as tag to remove it.
+    If snapshot_id is omitted, the most recently loaded snapshot is used.
 
     Example:
         baldrick --db session.db tag 1 crash-2026
+        baldrick --db session.db tag crash-2026
         baldrick --db session.db tag 1 ""
     """
     from blackadder.models import ProcessSnapshot
     from sqlmodel import select as sql_select
+    from blackadder.db import ProcessDatabase
+
+    # Parse args: either [tag] or [snapshot_id, tag]
+    snapshot_id: int | None = None
+    new_tag: str
+    if not args:
+        console.print("[red]Error: tag requires at least a TAG argument[/red]")
+        raise typer.Exit(1)
+    elif len(args) == 1:
+        new_tag = args[0]
+    elif len(args) == 2:
+        try:
+            snapshot_id = int(args[0])
+        except ValueError:
+            console.print(f"[red]Error: Expected snapshot ID (integer), got {args[0]!r}[/red]")
+            raise typer.Exit(1)
+        new_tag = args[1]
+    else:
+        console.print("[red]Error: too many arguments. Usage: tag [SNAPSHOT_ID] TAG[/red]")
+        raise typer.Exit(1)
 
     config = _get_config_or_default()
     manager = _db_manager(_global_db, config)
 
     try:
         await manager.create_all()
+        db_proc = ProcessDatabase(manager, config)
+        snapshot_id = await _resolve_snapshot_id(db_proc, snapshot_id)
         async with manager.get_session() as session:
             result = await session.execute(
                 sql_select(ProcessSnapshot).where(ProcessSnapshot.id == snapshot_id)

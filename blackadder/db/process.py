@@ -633,6 +633,290 @@ class ProcessDatabase:
         )
         return len(dump.threads)
 
+    async def get_latest_snapshot(self) -> ProcessSnapshot | None:
+        """Return the most recently created ProcessSnapshot (highest id), or None if empty."""
+        async with self.manager.get_session() as session:
+            result = await session.execute(  # type: ignore
+                select(ProcessSnapshot).order_by(ProcessSnapshot.id.desc()).limit(1)
+            )
+            return result.scalars().first()
+
+    async def resolve_snapshot(
+        self,
+        tag: str | None,
+        snapshot_id: int | None,
+    ) -> ProcessSnapshot | None:
+        """
+        Resolve which existing snapshot to update, based on --tag / --snapshot-id rules.
+
+        Rules:
+          (no tag, no id)  → None  (caller creates a new snapshot)
+          (tag, no id)     → snapshot with that tag, or None if not found
+          (no tag, id)     → snapshot with that id (raises if not found)
+          (tag, id)        → snapshot with that id (raises if not found);
+                             also validates that the tag does not belong to a
+                             *different* snapshot (caller handles --force logic)
+
+        Returns:
+            Existing ProcessSnapshot, or None when a new one should be created.
+
+        Raises:
+            ProcessNotFoundError: snapshot_id given but not found in DB
+            DatabaseConstraintError: tag belongs to a different snapshot than snapshot_id
+        """
+        from blackadder.exceptions import ProcessNotFoundError, DatabaseConstraintError
+
+        async with self.manager.get_session() as session:
+            if snapshot_id is not None:
+                result = await session.execute(  # type: ignore
+                    select(ProcessSnapshot).where(ProcessSnapshot.id == snapshot_id)
+                )
+                snap = result.scalars().first()
+                if snap is None:
+                    raise ProcessNotFoundError(f"Snapshot {snapshot_id} not found")
+
+                if tag is not None and snap.tag != tag:
+                    # Check if the tag is already claimed by another snapshot
+                    other = (await session.execute(  # type: ignore
+                        select(ProcessSnapshot).where(ProcessSnapshot.tag == tag)
+                    )).scalars().first()
+                    if other is not None and other.id != snapshot_id:
+                        raise DatabaseConstraintError(
+                            f"Tag {tag!r} already assigned to snapshot {other.id}, not {snapshot_id}. "
+                            f"Use --force / -f to steal the tag (the other snapshot will lose it)."
+                        )
+                return snap
+
+            if tag is not None:
+                result = await session.execute(  # type: ignore
+                    select(ProcessSnapshot).where(ProcessSnapshot.tag == tag)
+                )
+                return result.scalars().first()  # None if not found → create new
+
+        return None
+
+    async def merge_into_snapshot(
+        self,
+        snapshot: ProcessSnapshot,
+        *,
+        pid: int | None = None,
+        maps_text: str | None = None,
+        core_path: str | None = None,
+        gdb_text: str | None = None,
+        rootfs: str = "/",
+        debugfs: str | None = None,
+        new_tag: str | None = None,
+        force_tag: bool = False,
+    ) -> ProcessSnapshot:
+        """
+        Merge additional data into an existing ProcessSnapshot (additive, no overwrites).
+
+        All operations are additive:
+          - MemoryMappings: added only if start_addr not already present
+          - Threads: added by TID; None fields filled in if new source has them
+          - BacktraceEntry: added only if (thread_id, frame_num) not already present
+          - ProcessRegisterState: added per thread_id only if absent
+
+        Also updates sources_json and source_type to reflect the new data sources.
+        If new_tag is given and differs from the current tag, it is applied (the old
+        tag owner is cleared when force_tag=True).
+
+        Args:
+            snapshot:   Existing ProcessSnapshot to enrich
+            pid:        Process PID (used to load /proc threads when maps_text given)
+            maps_text:  /proc/PID/maps content to merge
+            core_path:  ELF core dump path to merge mappings from
+            gdb_text:   GDB text dump to merge threads/backtraces from
+            rootfs:     Rootfs prefix for binary resolution
+            debugfs:    Debugfs prefix (defaults to rootfs)
+            new_tag:    New tag to assign (if different from current)
+            force_tag:  When True, clear the tag from any other snapshot that owns it
+
+        Returns:
+            Updated ProcessSnapshot (re-fetched with mappings eagerly loaded)
+        """
+        import json
+        from blackadder.exceptions import ProcessNotFoundError
+
+        process_id = snapshot.id
+        assert process_id is not None
+
+        sources: list[dict] = json.loads(snapshot.sources_json or "[]")
+        source_types: list[str] = [s.strip() for s in snapshot.source_type.split("+")]
+        new_mappings_added = False
+
+        async with self.manager.get_session() as session:
+            # Re-attach snapshot to this session
+            snap = await session.get(ProcessSnapshot, process_id)
+            if snap is None:
+                raise ProcessNotFoundError(f"Snapshot {process_id} not found")
+
+            # ── Tag update ────────────────────────────────────────────────────
+            if new_tag is not None and snap.tag != new_tag:
+                if force_tag:
+                    # Clear tag from the current owner if it's a different snapshot
+                    other = (await session.execute(  # type: ignore
+                        select(ProcessSnapshot).where(
+                            (ProcessSnapshot.tag == new_tag)
+                            & (ProcessSnapshot.id != process_id)
+                        )
+                    )).scalars().first()
+                    if other is not None:
+                        other.tag = None
+                        session.add(other)
+                snap.tag = new_tag
+                session.add(snap)
+
+            # ── Merge memory mappings (maps_text or core_path) ────────────────
+            if maps_text or core_path:
+                # Collect existing start_addrs for dedup
+                existing_addrs_result = await session.execute(  # type: ignore
+                    select(MemoryMapping.start_addr).where(
+                        MemoryMapping.process_id == process_id
+                    )
+                )
+                existing_addrs: set[int] = set(existing_addrs_result.scalars().all())
+
+                parsed_maps: list[dict] = []
+                src_type: str = ""
+                src_path: str | None = None
+
+                if maps_text:
+                    lines = maps_text.strip().split("\n")
+                    parsed_maps = await asyncio.to_thread(self._parse_maps_lines, lines)
+                    src_type = "maps"
+                elif core_path:
+                    from blackadder.binutils.coredump import CoreDumpParser
+                    parser = CoreDumpParser(self.config)
+                    core_result = await parser.parse_core_dump(core_path)
+                    if core_result.status == "success":
+                        parsed_maps = core_result.mappings or []
+                    src_type = "core_dump"
+                    src_path = core_path
+
+                added = 0
+                for map_data in parsed_maps:
+                    addr = map_data.get("start_addr")
+                    if addr in existing_addrs:
+                        continue
+                    try:
+                        mapping = MemoryMapping(process_id=process_id, **map_data)
+                        session.add(mapping)
+                        existing_addrs.add(addr)
+                        added += 1
+                    except Exception as e:
+                        logger.debug("merge_mapping_skip", extra={"error": str(e)})
+
+                if added:
+                    new_mappings_added = True
+                    logger.info("merge_mappings_added", extra={"process_id": process_id, "count": added})
+
+                entry = {"type": src_type}
+                if src_path:
+                    entry["path"] = src_path
+                if entry not in sources:
+                    sources.append(entry)
+                if src_type not in source_types:
+                    source_types.append(src_type)
+
+            # ── Merge GDB dump (threads + backtraces + registers) ─────────────
+            if gdb_text:
+                from blackadder.binutils.gdb_dump import parse_gdb_dump
+
+                dump = parse_gdb_dump(gdb_text)
+                for gdb_thread in dump.threads:
+                    # Find or create Thread by TID
+                    thr_result = await session.execute(  # type: ignore
+                        select(Thread).where(
+                            (Thread.process_id == process_id)
+                            & (Thread.tid == gdb_thread.tid)
+                        )
+                    )
+                    thread = thr_result.scalars().first()
+
+                    if thread is None:
+                        thread = Thread(process_id=process_id, tid=gdb_thread.tid)
+                        session.add(thread)
+                        await session.flush()
+
+                    # Fill None fields on existing thread
+                    changed = False
+                    if gdb_thread.name and not thread.name:
+                        thread.name = gdb_thread.name; changed = True
+                    if changed:
+                        session.add(thread)
+                        await session.flush()
+
+                    # Existing (thread_id, frame_num) pairs for dedup
+                    existing_frames_result = await session.execute(  # type: ignore
+                        select(BacktraceEntry.frame_num).where(
+                            (BacktraceEntry.process_id == process_id)
+                            & (BacktraceEntry.thread_id == thread.id)
+                        )
+                    )
+                    existing_frames: set[int] = set(existing_frames_result.scalars().all())
+
+                    for frame in gdb_thread.frames:
+                        if frame.frame_num in existing_frames:
+                            continue
+                        session.add(BacktraceEntry(
+                            process_id=process_id,
+                            frame_num=frame.frame_num,
+                            address=frame.address or 0,
+                            resolved_symbol=frame.symbol or "???",
+                            resolved_file=frame.source_file,
+                            resolved_line=frame.source_line,
+                            thread_id=thread.id,
+                        ))
+                        existing_frames.add(frame.frame_num)
+
+                    # Register state — add only if absent for this thread
+                    if gdb_thread.registers:
+                        existing_reg = (await session.execute(  # type: ignore
+                            select(ProcessRegisterState).where(
+                                (ProcessRegisterState.process_id == process_id)
+                                & (ProcessRegisterState.thread_id == thread.id)
+                            )
+                        )).scalars().first()
+                        if existing_reg is None:
+                            import json as _json
+                            session.add(ProcessRegisterState(
+                                process_id=process_id,
+                                thread_id=thread.id,
+                                registers_json=_json.dumps(gdb_thread.registers),
+                            ))
+
+                entry = {"type": "gdb_dump"}
+                if entry not in sources:
+                    sources.append(entry)
+                if "gdb_dump" not in source_types:
+                    source_types.append("gdb_dump")
+
+            # ── Update snapshot metadata ──────────────────────────────────────
+            snap.sources_json = json.dumps(sources)
+            snap.source_type = "+".join(source_types)
+            session.add(snap)
+            await session.commit()
+
+        # Re-fetch with eagerly loaded mappings
+        async with self.manager.get_session() as session:
+            result = await session.execute(  # type: ignore
+                select(ProcessSnapshot)
+                .where(ProcessSnapshot.id == process_id)
+                .options(selectinload(ProcessSnapshot.mappings))
+            )
+            process = result.scalars().first()
+
+        # Load /proc threads if pid given (and maps were merged — implies live process)
+        if pid is not None and new_mappings_added:
+            await self._load_threads(process_id, pid, process.mappings)
+
+        # Re-link binaries for any new mappings
+        if new_mappings_added:
+            await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
+
+        return process
+
     async def get_deadlock_report(self, process_id: int, lock_state_text: str | None = None):
         """
         Analyze threads of a process snapshot for deadlocks.
