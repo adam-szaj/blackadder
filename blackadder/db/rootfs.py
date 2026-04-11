@@ -13,7 +13,7 @@ import os
 from sqlmodel import select
 
 from blackadder.binutils.hasher import FunctionHasher
-from blackadder.models import Binary, BinaryLocator, FunctionFingerprint, SectionHeader, Symbol
+from blackadder.models import Binary, BinaryLocator, DebugLine, DwarfMember, DwarfType, FunctionFingerprint, SectionHeader, Symbol
 
 from .base import AsyncDatabaseManager
 
@@ -322,3 +322,131 @@ class RootfsDatabase:
                 select(FunctionFingerprint).where(FunctionFingerprint.binary_id == binary_id)
             )
             return result.scalars().first() is not None
+
+    async def _get_binary_id_for_path(self, binary_path: str) -> int | None:
+        """Return binary.id for the given file path, or None if not in DB."""
+        async with self.manager.get_session() as session:
+            loc_result = await session.execute(
+                select(BinaryLocator).where(BinaryLocator.path == binary_path)
+            )
+            locator = loc_result.scalars().first()
+            if not locator:
+                return None
+            bin_result = await session.execute(
+                select(Binary).where(Binary.md5sum == locator.md5sum)
+            )
+            binary = bin_result.scalars().first()
+            return binary.id if binary else None
+
+    async def load_dwarf_types(self, binary_path: str) -> tuple[int, int]:
+        """
+        Extract DWARF type definitions from a binary and store in DB.
+
+        Idempotent: skips if DwarfType records already exist for this binary.
+
+        Returns:
+            (type_count, member_count) inserted
+        """
+        from blackadder.binutils.dwarf_parser import parse_dwarf_types
+
+        binary_id = await self._get_binary_id_for_path(binary_path)
+        if binary_id is None:
+            raise ValueError(f"Binary not in DB: {binary_path}. Run 'load' first.")
+
+        # Idempotency check
+        async with self.manager.get_session() as session:
+            result = await session.execute(
+                select(DwarfType).where(DwarfType.binary_id == binary_id).limit(1)
+            )
+            if result.scalars().first() is not None:
+                logger.debug("dwarf_types_already_loaded", extra={"binary": binary_path})
+                return 0, 0
+
+        types, members = await parse_dwarf_types(binary_path, self.config)
+
+        if not types:
+            return 0, 0
+
+        # Build die_offset → db_id map for member linkage
+        async with self.manager.get_session() as session:
+            die_to_id: dict[int, int] = {}
+            for t in types:
+                obj = DwarfType(
+                    binary_id=binary_id,
+                    die_offset=t["die_offset"],
+                    tag=t["tag"],
+                    name=t.get("name"),
+                    byte_size=t.get("byte_size"),
+                    type_ref=t.get("type_ref"),
+                    encoding=t.get("encoding"),
+                )
+                session.add(obj)
+                await session.flush()
+                die_to_id[t["die_offset"]] = obj.id  # type: ignore[index]
+
+            for m in members:
+                parent_id = die_to_id.get(m["parent_die_offset"])
+                if parent_id is None:
+                    continue
+                session.add(DwarfMember(
+                    type_id=parent_id,
+                    name=m.get("name"),
+                    byte_offset=m["byte_offset"],
+                    member_type_ref=m["member_type_ref"],
+                ))
+
+            await session.commit()
+
+        logger.debug(
+            "dwarf_types_loaded",
+            extra={"binary": binary_path, "types": len(types), "members": len(members)},
+        )
+        return len(types), len(members)
+
+    async def load_debug_line(self, binary_path: str) -> int:
+        """
+        Extract source line→address mappings from a binary and store in DB.
+
+        Idempotent: skips if DebugLine records already exist for this binary.
+
+        Returns:
+            Number of records inserted
+        """
+        from blackadder.binutils.dwarf_parser import parse_debug_line
+
+        binary_id = await self._get_binary_id_for_path(binary_path)
+        if binary_id is None:
+            raise ValueError(f"Binary not in DB: {binary_path}. Run 'load' first.")
+
+        # Idempotency check
+        async with self.manager.get_session() as session:
+            result = await session.execute(
+                select(DebugLine).where(DebugLine.binary_id == binary_id).limit(1)
+            )
+            if result.scalars().first() is not None:
+                logger.debug("debug_line_already_loaded", extra={"binary": binary_path})
+                return 0
+
+        records = await parse_debug_line(binary_path, self.config)
+
+        if not records:
+            return 0
+
+        # Deduplicate before insert
+        seen: set[tuple[str, int, int]] = set()
+        async with self.manager.get_session() as session:
+            for r in records:
+                key = (r["source_file"], r["line_number"], r["address"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                session.add(DebugLine(
+                    binary_id=binary_id,
+                    source_file=r["source_file"],
+                    line_number=r["line_number"],
+                    address=r["address"],
+                ))
+            await session.commit()
+
+        logger.debug("debug_line_loaded", extra={"binary": binary_path, "count": len(seen)})
+        return len(seen)

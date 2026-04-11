@@ -167,6 +167,71 @@ class SymbolCache(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("binary_id", "offset", name="uq_symbolcache_binary_offset"),)
 
 
+class DwarfType(SQLModel, table=True):
+    """
+    DWARF type definition extracted from a binary via objdump --dwarf=info.
+
+    Covers: structure_type, union_type, base_type, typedef, pointer_type,
+    const_type, volatile_type, array_type, enumeration_type.
+
+    die_offset is the DIE offset in .debug_info — unique per binary, used for
+    cross-references between types (type_ref, DwarfMember.member_type_ref).
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    binary_id: int = Field(foreign_key="binary.id", index=True)
+    die_offset: int                            # Hex offset in .debug_info (unique per binary)
+    tag: str = Field(max_length=32)            # "structure_type", "base_type", "typedef", etc.
+    name: str | None = Field(default=None, index=True, max_length=256)
+    byte_size: int | None = None               # Total size in bytes (None for const/volatile wrappers)
+    type_ref: int | None = None                # die_offset of referenced DwarfType (typedef→underlying, pointer→target)
+    encoding: str | None = Field(default=None, max_length=32)  # "signed", "unsigned", "float", etc. (base_type only)
+
+    __table_args__ = (UniqueConstraint("binary_id", "die_offset", name="uq_dwarftype_binary_offset"),)
+
+    members: list["DwarfMember"] = Relationship(back_populates="dwarf_type")
+
+
+class DwarfMember(SQLModel, table=True):
+    """
+    Field within a DW_TAG_structure_type or DW_TAG_union_type.
+
+    byte_offset is DW_AT_data_member_location — byte offset from struct start.
+    member_type_ref is the die_offset of the DwarfType describing this field's type.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    type_id: int = Field(foreign_key="dwarftype.id", index=True)
+    name: str | None = Field(default=None, max_length=256)  # None for anonymous embedded structs
+    byte_offset: int                   # DW_AT_data_member_location (decimal bytes from struct start)
+    member_type_ref: int               # die_offset of the DwarfType for this member's type
+
+    dwarf_type: "DwarfType" = Relationship(back_populates="members")
+
+
+class DebugLine(SQLModel, table=True):
+    """
+    Source line → address mapping from .debug_line section.
+
+    Extracted via readelf --debug-dump=decodedline. Enables line2addr lookups
+    (reverse of addr2line) and DB-backed source location resolution.
+
+    source_file stores the full path when available, basename otherwise.
+    address is the binary offset (not virtual address).
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    binary_id: int = Field(foreign_key="binary.id", index=True)
+    source_file: str = Field(index=True, max_length=512)
+    line_number: int
+    address: int = Field(index=True)
+
+    __table_args__ = (UniqueConstraint(
+        "binary_id", "source_file", "line_number", "address",
+        name="uq_debugline",
+    ),)
+
+
 class BinaryLocator(SQLModel, table=True):
     """
     Maps a file path to a binary identified by MD5.

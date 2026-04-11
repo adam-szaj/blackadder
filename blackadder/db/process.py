@@ -456,17 +456,19 @@ class ProcessDatabase:
         binary_path, offset, binary_id = binary_info
 
         # Resolve symbol (with caching and semaphore limiting)
-        symbol = await self._get_cached_symbol(binary_path, offset, binary_id)
+        symbol, source_file, source_line = await self._get_cached_symbol(binary_path, offset, binary_id)
 
         return ResolvedFrame(
             address=addr,
             frame_num=frame_num,
             symbol=symbol,
+            file=source_file,
+            line=source_line,
         )
 
     async def _get_cached_symbol(
         self, binary_path: str, offset: int, binary_id: int | None = None
-    ) -> str:
+    ) -> tuple[str, str | None, int | None]:
         """
         Get symbol for binary:offset pair with three-tier caching.
 
@@ -483,14 +485,14 @@ class ProcessDatabase:
             binary_id:   DB id of binary (None if not in DB)
 
         Returns:
-            Symbol name or "???" if resolution fails
+            (symbol, source_file, source_line) — source fields may be None
         """
         cache_key = (binary_path, offset)
 
-        # Tier 1: in-memory cache (fastest)
+        # Tier 1: in-memory cache (fastest) — stores symbol string only
         if cache_key in self.symbol_cache:
             logger.debug("symbol_cache_hit_memory", extra={"binary_path": binary_path, "offset": offset})
-            return self.symbol_cache[cache_key]
+            return self.symbol_cache[cache_key], None, None
 
         # Tier 2: SQLite persistent cache
         if binary_id is not None:
@@ -505,25 +507,25 @@ class ProcessDatabase:
                     symbol = cached.symbol or "???"
                     logger.debug("symbol_cache_hit_db", extra={"binary_path": binary_path, "offset": offset})
                     self.symbol_cache[cache_key] = symbol
-                    return symbol
+                    return symbol, cached.source_file, cached.source_line
 
         # Tier 3: subprocess resolution
-        from blackadder.binutils import resolve_symbol
+        from blackadder.binutils.resolver import resolve_symbol_full
 
         try:
             async with self.subprocess_sem:
-                symbol = await resolve_symbol(binary_path, offset, self.config)
+                symbol, src_file, src_line = await resolve_symbol_full(binary_path, offset, self.config)
         except Exception as e:
             logger.warning(
                 "symbol_resolution_failed",
                 extra={"binary_path": binary_path, "offset": offset, "error": str(e)},
             )
-            return "???"
+            return "???", None, None
 
         # Persist to SQLite (fire-and-forget, don't block caller)
         if binary_id is not None:
             asyncio.ensure_future(
-                self._persist_symbol_cache(binary_id, offset, symbol)
+                self._persist_symbol_cache(binary_id, offset, symbol, src_file, src_line)
             )
 
         # Store in in-memory cache with FIFO eviction
@@ -533,13 +535,19 @@ class ProcessDatabase:
 
         self.symbol_cache[cache_key] = symbol
         logger.debug("symbol_resolved", extra={"binary_path": binary_path, "offset": offset, "symbol": symbol})
-        return symbol
+        return symbol, src_file, src_line
 
-    async def _persist_symbol_cache(self, binary_id: int, offset: int, symbol: str) -> None:
+    async def _persist_symbol_cache(
+        self,
+        binary_id: int,
+        offset: int,
+        symbol: str,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
         """Persist a resolved symbol to the SQLite SymbolCache table (INSERT OR IGNORE)."""
         try:
             async with self.manager.get_session() as session:
-                # Use INSERT OR IGNORE semantics via merge/get pattern
                 stmt = select(SymbolCache).where(
                     (SymbolCache.binary_id == binary_id)
                     & (SymbolCache.offset == offset)
@@ -547,7 +555,13 @@ class ProcessDatabase:
                 result = await session.execute(stmt)  # type: ignore
                 existing = result.scalars().first()
                 if existing is None:
-                    entry = SymbolCache(binary_id=binary_id, offset=offset, symbol=symbol)
+                    entry = SymbolCache(
+                        binary_id=binary_id,
+                        offset=offset,
+                        symbol=symbol,
+                        source_file=source_file,
+                        source_line=source_line,
+                    )
                     session.add(entry)
                     await session.commit()
         except Exception as e:

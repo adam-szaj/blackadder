@@ -259,6 +259,9 @@ async def load(
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
+    load_types: bool = typer.Option(
+        False, "--types", "-t", help="Also load DWARF type info and .debug_line mappings"
+    ),
 ) -> None:
     """
     Load binaries from rootfs into the rootfs database.
@@ -271,6 +274,7 @@ async def load(
         baldrick load --rootfs /target --perm u+x
         baldrick load --rootfs /target --maps /proc/12345/maps
         baldrick load --rootfs /target --pid 12345
+        baldrick load --rootfs /target --glob '**/*.so' --types
     """
     sources = [glob_pattern, perm, files_spec, maps_file, pid, core_file]
     if not any(s is not None for s in sources):
@@ -311,6 +315,14 @@ async def load(
                         console.print(f"  [dim]debug: {debug_file}[/dim]")
                 else:
                     skipped += 1
+                if load_types:
+                    try:
+                        tc, mc = await rootfs_db_obj.load_dwarf_types(path)
+                        lc = await rootfs_db_obj.load_debug_line(path)
+                        if tc or lc:
+                            console.print(f"  [dim]types: {tc} types, {mc} members, {lc} line records[/dim]")
+                    except Exception as e:
+                        console.print(f"  [yellow]types skip {path}: {e}[/yellow]")
             except Exception as e:
                 failed += 1
                 console.print(f"[yellow]  Skip {path}: {e}[/yellow]")
@@ -318,6 +330,235 @@ async def load(
         console.print(
             f"\n[green]✓ Done: {loaded} loaded, {skipped} already cached, {failed} failed[/green]"
         )
+        await manager.close()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+async def load_types(
+    binary: str = typer.Option(..., "--binary", "-b", help="Path to binary (must be loaded via 'load' first)"),
+) -> None:
+    """
+    Load DWARF type info and .debug_line mappings from a single binary.
+
+    The binary must already be indexed (run 'load' first).
+    Idempotent — safe to run multiple times.
+
+    Example:
+        baldrick --db session.db load-types --binary /usr/lib/x86_64-linux-gnu/libpthread.so.0
+    """
+    config = _get_config_or_default()
+    manager = _db_manager(_global_db, config)
+
+    try:
+        await manager.create_all()
+        rootfs_db_obj = RootfsDatabase(manager, config)
+        tc, mc = await rootfs_db_obj.load_dwarf_types(binary)
+        lc = await rootfs_db_obj.load_debug_line(binary)
+        console.print(f"[green]✓ {binary}: {tc} types, {mc} members, {lc} line records[/green]")
+        await manager.close()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+async def cast_mem(
+    type_name: str = typer.Option(..., "--type", help="Struct/typedef name to interpret memory as"),
+    binary: str = typer.Option(..., "--binary", "-b", help="Binary name (e.g. libc.so.6)"),
+    mem: str = typer.Option(..., "--mem", help="Hex bytes or @path to binary file"),
+    addr: str = typer.Option("0x0", "--addr", help="Base address offset within mem (hex)"),
+) -> None:
+    """
+    Interpret raw memory bytes as a named C struct.
+
+    --mem can be a hex string (e.g. 0102030405060708) or @/path/to/dump.bin.
+    --addr specifies the byte offset into the dump where the struct starts.
+
+    Example:
+        baldrick --db session.db cast-mem --type pthread_mutex_t --binary libc.so.6 \\
+            --mem 0000000000000000010000000000000000000000
+        baldrick --db session.db cast-mem --type pthread_mutex_t --binary libc.so.6 \\
+            --mem @/tmp/memdump.bin --addr 0x1000
+    """
+    import struct as _struct
+
+    from blackadder.models import DwarfMember as DwarfMemberModel
+    from blackadder.models import DwarfType as DwarfTypeModel
+    from sqlmodel import select as sql_select
+
+    # --- Parse memory bytes ---
+    try:
+        base_offset = int(addr, 16)
+    except ValueError:
+        console.print(f"[red]Error: invalid --addr: {addr!r}[/red]")
+        raise typer.Exit(1)
+
+    if mem.startswith("@"):
+        file_path = mem[1:]
+        try:
+            with open(file_path, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            console.print(f"[red]Error reading {file_path}: {e}[/red]")
+            raise typer.Exit(1)
+        buf = raw[base_offset:]
+    else:
+        hex_str = mem.replace(" ", "").replace("0x", "")
+        try:
+            buf = bytes.fromhex(hex_str)
+        except ValueError as e:
+            console.print(f"[red]Error: invalid hex in --mem: {e}[/red]")
+            raise typer.Exit(1)
+        buf = buf[base_offset:]
+
+    config = _get_config_or_default()
+    manager = _db_manager(_global_db, config)
+
+    try:
+        await manager.create_all()
+
+        async def get_type_by_name(name: str, bin_id: int) -> "DwarfTypeModel | None":
+            async with manager.get_session() as s:
+                result = await s.execute(
+                    sql_select(DwarfTypeModel).where(
+                        (DwarfTypeModel.binary_id == bin_id)
+                        & (DwarfTypeModel.name == name)
+                    )
+                )
+                return result.scalars().first()
+
+        async def get_type_by_offset(die_offset: int, bin_id: int) -> "DwarfTypeModel | None":
+            async with manager.get_session() as s:
+                result = await s.execute(
+                    sql_select(DwarfTypeModel).where(
+                        (DwarfTypeModel.binary_id == bin_id)
+                        & (DwarfTypeModel.die_offset == die_offset)
+                    )
+                )
+                return result.scalars().first()
+
+        async def get_members(type_id: int) -> "list[DwarfMemberModel]":
+            async with manager.get_session() as s:
+                result = await s.execute(
+                    sql_select(DwarfMemberModel).where(DwarfMemberModel.type_id == type_id)
+                )
+                return list(result.scalars().all())
+
+        # --- Find binary_id ---
+        from blackadder.models import Binary as BinaryModel
+        async with manager.get_session() as s:
+            result = await s.execute(
+                sql_select(BinaryModel).where(BinaryModel.name == binary)
+            )
+            bin_obj = result.scalars().first()
+
+        if bin_obj is None:
+            console.print(f"[red]Binary not found: {binary!r}[/red]")
+            raise typer.Exit(1)
+        bin_id = bin_obj.id
+
+        # --- Resolve typedef chain to root struct/union ---
+        root = await get_type_by_name(type_name, bin_id)
+        if root is None:
+            console.print(f"[red]Type not found: {type_name!r} in {binary}[/red]")
+            raise typer.Exit(1)
+
+        visited: set[int] = set()
+        while root.tag in ("typedef", "const_type", "volatile_type", "restrict_type"):
+            if root.type_ref is None or root.id in visited:
+                break
+            visited.add(root.id)  # type: ignore[arg-type]
+            next_type = await get_type_by_offset(root.type_ref, bin_id)
+            if next_type is None:
+                break
+            root = next_type
+
+        if root.tag not in ("structure_type", "union_type"):
+            console.print(f"[yellow]Warning: {type_name!r} resolves to tag={root.tag!r}, not a struct/union[/yellow]")
+
+        # --- Recursively flatten struct fields ---
+        FlatField = tuple[int, str, str, int | None, str | None]  # (offset, path, type_name, byte_size, encoding)
+
+        async def flatten(
+            t: "DwarfTypeModel",
+            prefix: str = "",
+            base: int = 0,
+            depth: int = 0,
+        ) -> list[FlatField]:
+            if depth > 12:
+                return []
+            members = await get_members(t.id)  # type: ignore[arg-type]
+            rows: list[FlatField] = []
+            for m in sorted(members, key=lambda x: x.byte_offset):
+                field_path = f"{prefix}.{m.name}" if m.name else f"{prefix}.<anon>"
+                abs_offset = base + m.byte_offset
+                if m.member_type_ref is None:
+                    rows.append((abs_offset, field_path, "?", None, None))
+                    continue
+                mtype = await get_type_by_offset(m.member_type_ref, bin_id)
+                if mtype is None:
+                    rows.append((abs_offset, field_path, "?", None, None))
+                    continue
+                # Follow typedef/const/volatile to leaf
+                inner = mtype
+                iv: set[int] = set()
+                while inner.tag in ("typedef", "const_type", "volatile_type", "restrict_type"):
+                    if inner.type_ref is None or inner.id in iv:
+                        break
+                    iv.add(inner.id)  # type: ignore[arg-type]
+                    nxt = await get_type_by_offset(inner.type_ref, bin_id)
+                    if nxt is None:
+                        break
+                    inner = nxt
+                if inner.tag in ("structure_type", "union_type"):
+                    sub = await flatten(inner, prefix=field_path, base=abs_offset, depth=depth + 1)
+                    rows.extend(sub)
+                else:
+                    rows.append((abs_offset, field_path, inner.name or inner.tag, inner.byte_size, inner.encoding))
+            return rows
+
+        flat = await flatten(root, prefix=type_name)
+
+        # --- Render table ---
+        table = Table(title=f"cast-mem: {type_name} @ {binary}")
+        table.add_column("Offset", style="cyan")
+        table.add_column("Field", style="green")
+        table.add_column("Type", style="yellow")
+        table.add_column("Value (hex)", style="magenta")
+        table.add_column("Value (dec)", style="white")
+
+        for foffset, fpath, ftname, fbsize, fenc in flat:
+            if fbsize and fbsize > 0 and foffset + fbsize <= len(buf):
+                raw_bytes = buf[foffset:foffset + fbsize]
+                hex_val = raw_bytes.hex()
+                # Interpret as integer
+                signed = fenc in ("signed", "signed_char") if fenc else False
+                try:
+                    int_val = int.from_bytes(raw_bytes, "little", signed=signed)
+                    dec_val = str(int_val)
+                except Exception:
+                    dec_val = "?"
+            else:
+                hex_val = "?" if foffset >= len(buf) else "…"
+                dec_val = "?"
+            table.add_row(
+                f"+{foffset:#06x}",
+                fpath,
+                ftname,
+                hex_val,
+                dec_val,
+            )
+
+        console.print(table)
         await manager.close()
 
     except typer.Exit:

@@ -29,42 +29,47 @@ async def resolve_symbol(binary_path: str, offset: int, config) -> str:
     Returns:
         Symbol name in format "function_name+0x123" or "???"
     """
-    # Try addr2line first (gives best results with debug symbols)
-    symbol = await _resolve_with_addr2line(binary_path, offset, config)
-
-    if symbol and symbol != "??":
-        return symbol
-
-    # Fall back to objdump symbol table
-    symbol = await _resolve_with_objdump(binary_path, offset, config)
-
-    return symbol if symbol else "???"
+    result = await resolve_symbol_full(binary_path, offset, config)
+    return result[0]
 
 
-async def _resolve_with_addr2line(binary_path: str, offset: int, config) -> str | None:
+async def resolve_symbol_full(
+    binary_path: str, offset: int, config
+) -> tuple[str, str | None, int | None]:
     """
-    Use addr2line to resolve address to function name and line number.
-
-    This works best with debug symbols (.debug_info section).
-
-    Args:
-        binary_path: Path to ELF binary (or separate debug file)
-        offset: Offset within binary
-        config: BlackadderConfig
+    Resolve a binary offset to symbol name plus source file and line.
 
     Returns:
-        Symbol in format "function_name at file.c:123" or None
+        (symbol, source_file, source_line) — source_file/source_line may be None
+    """
+    sym, src_file, src_line = await _resolve_with_addr2line(binary_path, offset, config)
+
+    if sym and sym != "??":
+        return sym, src_file, src_line
+
+    # Fall back to objdump symbol table (no source info available)
+    sym2 = await _resolve_with_objdump(binary_path, offset, config)
+    return (sym2 if sym2 else "???"), None, None
+
+
+async def _resolve_with_addr2line(
+    binary_path: str, offset: int, config
+) -> tuple[str | None, str | None, int | None]:
+    """
+    Use addr2line to resolve address to function name, source file, and line.
+
+    addr2line -f output:
+        function_name
+        file.c:42
+
+    Returns:
+        (function_name, source_file, source_line) — all may be None on failure
     """
     parser = BinToolsParser(config)
+    lines: list[str] = []
 
-    result = None
-
-    def on_line(line: str):
-        nonlocal result
-        if line and line != "??":
-            result = line
-            # Don't try to parse, just store raw output
-            # addr2line -f output is "function_name" on first line
+    def on_line(line: str) -> None:
+        lines.append(line)
 
     try:
         cmd = [
@@ -78,16 +83,32 @@ async def _resolve_with_addr2line(binary_path: str, offset: int, config) -> str 
 
         await parser.run_command_limited(cmd, on_line)
 
-        if result:
-            # addr2line -f gives: function_name\nfile:line
-            # We want just the function name
-            return result.split("\n")[0] if "\n" in result else result
+        if not lines or lines[0] in ("??", ""):
+            return None, None, None
+
+        func = lines[0]
+        src_file: str | None = None
+        src_line: int | None = None
+
+        if len(lines) >= 2:
+            # Format: "path/file.c:42" or "??:0" or "path/file.c:42 (discriminator 1)"
+            raw_loc = lines[1].split(" ")[0]  # strip discriminator suffix
+            if raw_loc and raw_loc != "??:0":
+                parts = raw_loc.rsplit(":", 1)
+                if parts[0] != "??":
+                    src_file = parts[0]
+                if len(parts) > 1:
+                    try:
+                        src_line = int(parts[1])
+                    except ValueError:
+                        pass
+
+        return func, src_file, src_line
 
     except Exception:
-        # If addr2line fails, fall through to objdump
         pass
 
-    return None
+    return None, None, None
 
 
 async def _resolve_with_objdump(binary_path: str, offset: int, config) -> str | None:
