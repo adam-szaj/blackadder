@@ -9,14 +9,21 @@ Provides commands for:
 - Analyzing memory layout
 """
 
+import asyncio
 import glob as glob_module
+import logging
 import re
 import sys
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
+
+logger = logging.getLogger("blackadder.cli")
 
 from blackadder.binutils import init_parser, parse_backtrace_auto
 from blackadder.config import BlackadderConfig
@@ -125,6 +132,15 @@ def _parse_perm(perm_str: str) -> tuple[int, int]:
     raise ValueError(f"Cannot parse permission string: {perm_str!r}")
 
 
+def _is_elf(path: str) -> bool:
+    """Return True if file starts with the ELF magic bytes \\x7fELF."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
 def _collect_paths_from_maps_text(maps_text: str, rootfs: str) -> list[str]:
     """Extract unique binary paths from /proc/maps text, resolved against rootfs."""
     rootfs_base = rootfs.rstrip("/") or "/"
@@ -140,39 +156,58 @@ def _collect_paths_from_maps_text(maps_text: str, rootfs: str) -> list[str]:
     return sorted(paths)
 
 
-def _collect_binary_paths(
+_DEFAULT_SCAN_DIRS = "bin:sbin:lib:usr/bin:usr/sbin:usr/lib"
+
+
+def _iter_binary_paths(
     rootfs: str,
     glob_pattern: str | None = None,
     perm: str | None = None,
     files_spec: str | None = None,
+    dirs: str | None = None,
     maps_file: str | None = None,
     pid: int | None = None,
     core_file: str | None = None,
-) -> list[str]:
+) -> Iterator[str]:
     """
-    Collect binary file paths from the given source.
+    Yield candidate binary file paths one by one from the given source.
 
-    Returns a sorted, deduplicated list of absolute paths to binary files.
+    Yields absolute paths to ELF files (deduplicated via caller-maintained set).
+    Filesystem sources (glob, perm, dirs) are filtered to ELF binaries only.
+    Logging DEBUG messages describe each filesystem entry examined.
     """
-    paths: set[str] = set()
-
     rootfs_base = rootfs.rstrip("/") or "/"
 
     if glob_pattern:
         full_pattern = str(Path(rootfs_base) / glob_pattern.lstrip("/"))
+        logger.debug("glob_scan_start", extra={"pattern": full_pattern})
         for match in glob_module.glob(full_pattern, recursive=True):
-            if Path(match).is_file():
-                paths.add(match)
+            logger.debug("glob_candidate", extra={"path": match})
+            if Path(match).is_file() and _is_elf(match):
+                yield match
 
     if perm:
         mask, value = _parse_perm(perm)
+        logger.debug("perm_scan_start", extra={"rootfs": rootfs_base, "perm": perm})
         for p in Path(rootfs_base).rglob("*"):
+            logger.debug("perm_candidate", extra={"path": str(p)})
             if p.is_file():
                 try:
-                    if p.stat().st_mode & mask == value:
-                        paths.add(str(p))
+                    if p.stat().st_mode & mask == value and _is_elf(str(p)):
+                        yield str(p)
                 except PermissionError:
                     pass
+
+    if dirs:
+        for d in dirs.split(":"):
+            scan_dir = Path(rootfs_base) / d.lstrip("/")
+            logger.debug("dirs_scan_start", extra={"dir": str(scan_dir)})
+            if not scan_dir.is_dir():
+                continue
+            for p in scan_dir.rglob("*"):
+                logger.debug("dirs_candidate", extra={"path": str(p)})
+                if p.is_file() and _is_elf(str(p)):
+                    yield str(p)
 
     if files_spec:
         if files_spec.startswith("@"):
@@ -182,31 +217,33 @@ def _collect_binary_paths(
             raw_paths = [p for p in files_spec.split(":") if p]
         for p in raw_paths:
             full = str(Path(rootfs_base) / p.lstrip("/"))
+            logger.debug("files_candidate", extra={"path": full})
             if Path(full).is_file():
-                paths.add(full)
+                yield full
             elif Path(p).is_file():
-                paths.add(p)
+                yield p
 
     if maps_file:
         with open(maps_file) as f:
             maps_text = f.read()
-        paths.update(_collect_paths_from_maps_text(maps_text, rootfs))
+        for p in _collect_paths_from_maps_text(maps_text, rootfs):
+            logger.debug("maps_candidate", extra={"path": p})
+            yield p
 
     if pid:
         proc_maps = f"/proc/{pid}/maps"
         try:
             with open(proc_maps) as f:
                 maps_text = f.read()
-            paths.update(_collect_paths_from_maps_text(maps_text, rootfs))
+            for p in _collect_paths_from_maps_text(maps_text, rootfs):
+                logger.debug("pid_maps_candidate", extra={"path": p})
+                yield p
         except PermissionError:
             console.print(f"[yellow]Warning: Cannot read {proc_maps} (permission denied)[/yellow]")
         except FileNotFoundError:
             console.print(f"[yellow]Warning: {proc_maps} not found - process {pid} may not exist[/yellow]")
 
     if core_file:
-        # Parse coredump and extract binary pathnames from PT_LOAD mappings
-        # (CoreDumpParser result may have empty pathnames for anonymous segments)
-        import asyncio
         from blackadder.binutils.coredump import CoreDumpParser
         config = _get_config_or_default()
         parser = CoreDumpParser(config)
@@ -223,10 +260,26 @@ def _collect_binary_paths(
                             found.append(full)
             return found
 
-        core_paths = asyncio.run(_get_core_paths())
-        paths.update(core_paths)
+        for p in asyncio.run(_get_core_paths()):
+            logger.debug("core_candidate", extra={"path": p})
+            yield p
 
-    return sorted(paths)
+
+def _collect_binary_paths(
+    rootfs: str,
+    glob_pattern: str | None = None,
+    perm: str | None = None,
+    files_spec: str | None = None,
+    dirs: str | None = None,
+    maps_file: str | None = None,
+    pid: int | None = None,
+    core_file: str | None = None,
+) -> list[str]:
+    """Collect and deduplicate binary file paths (no progress feedback)."""
+    seen: set[str] = set()
+    for p in _iter_binary_paths(rootfs, glob_pattern, perm, files_spec, dirs, maps_file, pid, core_file):
+        seen.add(p)
+    return sorted(seen)
 
 
 # ============================================================================
@@ -259,6 +312,14 @@ async def load(
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
+    dirs: str | None = typer.Option(
+        None, "--dirs",
+        help=(
+            "Colon-separated list of dirs to scan under rootfs for ELF binaries "
+            "(e.g. /bin:/lib:/usr/lib). "
+            f"Default when no source given: {_DEFAULT_SCAN_DIRS}"
+        ),
+    ),
     load_types: bool = typer.Option(
         False, "--types", "-t", help="Also load DWARF type info and .debug_line mappings"
     ),
@@ -268,32 +329,52 @@ async def load(
 
     Extracts sections, symbols, and debug info via objdump/readelf.
     Skips binaries already cached (identified by MD5).
+    Only ELF binaries are loaded (filesystem sources are filtered automatically).
 
     Example:
+        baldrick load --rootfs /target                          # scans default dirs
+        baldrick load --rootfs /target --dirs /bin:/lib:/usr/lib
         baldrick load --rootfs /target --glob '**/*.so'
         baldrick load --rootfs /target --perm u+x
         baldrick load --rootfs /target --maps /proc/12345/maps
         baldrick load --rootfs /target --pid 12345
         baldrick load --rootfs /target --glob '**/*.so' --types
     """
-    sources = [glob_pattern, perm, files_spec, maps_file, pid, core_file]
+    sources = [glob_pattern, perm, files_spec, dirs, maps_file, pid, core_file]
     if not any(s is not None for s in sources):
-        console.print("[red]Error: Specify at least one source: --glob, --perm, --files, --maps, --pid, or --coredump[/red]")
-        raise typer.Exit(1)
+        dirs = _DEFAULT_SCAN_DIRS
+        console.print(f"[dim]No source specified — scanning default dirs: {_DEFAULT_SCAN_DIRS}[/dim]")
 
     config = _get_config_or_default()
 
     try:
-        console.print("[blue]Collecting binary paths...[/blue]")
-        binary_paths = _collect_binary_paths(
-            rootfs=rootfs,
-            glob_pattern=glob_pattern,
-            perm=perm,
-            files_spec=files_spec,
-            maps_file=maps_file,
-            pid=pid,
-            core_file=core_file,
-        )
+        # Collect paths with live counter so the user sees progress during
+        # potentially slow filesystem walks (large rootfs / deep glob patterns).
+        seen: set[str] = set()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as collect_progress:
+            scan_task = collect_progress.add_task("Scanning filesystem…", total=None)
+            for raw_path in _iter_binary_paths(
+                rootfs=rootfs,
+                glob_pattern=glob_pattern,
+                perm=perm,
+                files_spec=files_spec,
+                dirs=dirs,
+                maps_file=maps_file,
+                pid=pid,
+                core_file=core_file,
+            ):
+                seen.add(raw_path)
+                collect_progress.update(
+                    scan_task,
+                    description=f"Scanning… {len(seen)} found",
+                )
+
+        binary_paths = sorted(seen)
 
         if not binary_paths:
             console.print("[yellow]No binary files found matching the given criteria.[/yellow]")
@@ -305,31 +386,127 @@ async def load(
         await manager.create_all()
         rootfs_db_obj = RootfsDatabase(manager, config)
 
-        loaded = skipped = failed = 0
-        for path in binary_paths:
-            try:
-                _, is_new, debug_file = await rootfs_db_obj.load_binary(path, rootfs=rootfs, debugfs=debugfs or rootfs)
-                if is_new:
-                    loaded += 1
-                    if debug_file:
-                        console.print(f"  [dim]debug: {debug_file}[/dim]")
-                else:
-                    skipped += 1
-                if load_types:
-                    try:
-                        tc, mc = await rootfs_db_obj.load_dwarf_types(path)
-                        lc = await rootfs_db_obj.load_debug_line(path)
-                        if tc or lc:
-                            console.print(f"  [dim]types: {tc} types, {mc} members, {lc} line records[/dim]")
-                    except Exception as e:
-                        console.print(f"  [yellow]types skip {path}: {e}[/yellow]")
-            except Exception as e:
-                failed += 1
-                console.print(f"[yellow]  Skip {path}: {e}[/yellow]")
+        # Limit how many binaries are processed concurrently.
+        # Each binary may spawn several subprocesses internally; the subprocess
+        # semaphore in BinToolsParser (default: min(32, cpu*2)) caps actual
+        # subprocess parallelism.  We use a separate, coarser concurrency limit
+        # here so we don't queue up thousands of DB sessions at once.
+        concurrency = min(config.max_subprocess_workers, len(binary_paths))
+        binary_sem = asyncio.Semaphore(concurrency)
+
+        loaded = skipped = failed = active = 0
+        _lock = asyncio.Lock()
+
+        # Per-phase timing accumulators (seconds, float)
+        t_sem_wait = t_load_binary = t_dwarf = t_debug_line = t_write_lock = t_write_cs = 0.0
+        tasks_done = 0
+
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        )
+        task_id = progress.add_task(
+            f"Loading binaries [dim](0/{concurrency} active)[/dim]",
+            total=len(binary_paths),
+        )
+
+        def _update_description() -> None:
+            """Refresh progress description with current active/limit counters."""
+            progress.update(
+                task_id,
+                description=f"Loading binaries [dim]({active}/{concurrency} active, {loaded} new, {skipped} cached)[/dim]",
+            )
+
+        async def _load_one(path: str) -> None:
+            nonlocal loaded, skipped, failed, active
+            nonlocal t_sem_wait, t_load_binary, t_dwarf, t_debug_line, t_write_lock, t_write_cs, tasks_done
+
+            # Measure wait for binary_sem slot
+            _t0 = time.monotonic()
+            async with binary_sem:
+                _dt_sem = time.monotonic() - _t0
+                async with _lock:
+                    active += 1
+                    t_sem_wait += _dt_sem
+                    _update_description()
+                try:
+                    _t1 = time.monotonic()
+                    _, is_new, _ = await rootfs_db_obj.load_binary(
+                        path, rootfs=rootfs, debugfs=debugfs or rootfs
+                    )
+                    _dt_lb = time.monotonic() - _t1
+
+                    _dt_dw = _dt_dl = 0.0
+                    if load_types:
+                        try:
+                            _t2 = time.monotonic()
+                            await asyncio.gather(
+                                rootfs_db_obj.load_dwarf_types(path),
+                                rootfs_db_obj.load_debug_line(path),
+                            )
+                            # Split equally (they run concurrently so wall time ≈ max)
+                            _dt_both = time.monotonic() - _t2
+                            _dt_dw = _dt_dl = _dt_both
+                        except Exception as dwarf_err:
+                            logger.debug(
+                                "dwarf_load_failed",
+                                extra={"path": path, "error": str(dwarf_err)},
+                            )
+
+                    async with _lock:
+                        if is_new:
+                            loaded += 1
+                        else:
+                            skipped += 1
+                        t_load_binary += _dt_lb
+                        t_dwarf += _dt_dw
+                        t_debug_line += _dt_dl
+                        tasks_done += 1
+                except Exception as e:
+                    async with _lock:
+                        failed += 1
+                        tasks_done += 1
+                    progress.console.print(f"  [yellow]Skip {Path(path).name}: {e}[/yellow]")
+                finally:
+                    async with _lock:
+                        active -= 1
+                        _update_description()
+                    progress.advance(task_id)
+
+        with progress:
+            await asyncio.gather(*[_load_one(p) for p in binary_paths])
+
+        # Expose write-lock stats from RootfsDatabase if available
+        wl_stats = getattr(rootfs_db_obj, "_write_lock_stats", None)
+        if wl_stats:
+            t_write_lock = wl_stats.get("wait", 0.0)
+            t_write_cs = wl_stats.get("held", 0.0)
 
         console.print(
-            f"\n[green]✓ Done: {loaded} loaded, {skipped} already cached, {failed} failed[/green]"
+            f"[green]✓ Done: {loaded} loaded, {skipped} already cached, {failed} failed[/green]"
         )
+
+        # Timing report
+        n = max(tasks_done, 1)
+        timing_table = Table(title="Phase timing (wall-clock, cumulative across all tasks)", box=None, show_header=True)
+        timing_table.add_column("Phase", style="bold")
+        timing_table.add_column("Total (s)", justify="right")
+        timing_table.add_column("Avg/task (ms)", justify="right")
+        timing_table.add_column("Note", style="dim")
+        timing_table.add_row("binary_sem wait",    f"{t_sem_wait:.2f}",   f"{t_sem_wait/n*1000:.0f}",   "waiting for concurrency slot")
+        timing_table.add_row("load_binary I/O",    f"{t_load_binary:.2f}", f"{t_load_binary/n*1000:.0f}", "md5 + readelf + objdump×2")
+        if load_types:
+            timing_table.add_row("dwarf+debug_line",   f"{t_dwarf:.2f}",  f"{t_dwarf/n*1000:.0f}",      "objdump --dwarf + readelf decodedline (parallel)")
+        if wl_stats:
+            timing_table.add_row("write_lock wait",  f"{t_write_lock:.2f}", f"{t_write_lock/n*1000:.0f}", "waiting for DB write serialisation")
+            timing_table.add_row("write_lock held",  f"{t_write_cs:.2f}",   f"{t_write_cs/n*1000:.0f}",  "time inside critical section")
+        console.print(timing_table)
         await manager.close()
 
     except typer.Exit:

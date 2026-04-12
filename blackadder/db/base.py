@@ -40,10 +40,10 @@ class AsyncDatabaseManager:
         self.pool_size = pool_size
 
         # Create async engine with SQLite optimizations
-        # journal_mode=WAL for concurrent read/write
-        # timeout for longer waits on locked database
+        # journal_mode=WAL allows one writer + concurrent readers without "database is locked"
+        # busy_timeout lets writers retry for up to 15 s before raising OperationalError
         connect_args = {
-            "timeout": 10.0,
+            "timeout": 15.0,
             "check_same_thread": False,
         }
 
@@ -54,6 +54,15 @@ class AsyncDatabaseManager:
             connect_args=connect_args,
             pool_pre_ping=True,  # Test connections before using
         )
+
+        # Enable WAL mode and set busy timeout at the engine level so every
+        # connection benefits, not just the first one.
+        from sqlalchemy import event, text
+
+        @event.listens_for(self.engine.sync_engine, "connect")
+        def _set_wal(dbapi_conn, _connection_record):
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
+            dbapi_conn.execute("PRAGMA busy_timeout=15000")  # ms
 
         # Session factory for creating new async sessions
         self.session_maker = async_sessionmaker(
