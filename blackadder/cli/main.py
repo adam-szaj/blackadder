@@ -28,7 +28,7 @@ logger = logging.getLogger("blackadder.cli")
 from blackadder.binutils import init_parser, parse_backtrace_auto
 from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
-from blackadder.db.rootfs import DB_SENTINEL, RootfsDatabase
+from blackadder.db.rootfs import PAYLOAD_SENTINEL, RootfsDatabase
 from blackadder.logging_config import setup_logging
 from blackadder.theme import ColorTheme, column_style, format_value, load_theme
 
@@ -168,6 +168,7 @@ def _iter_binary_paths(
     maps_file: str | None = None,
     pid: int | None = None,
     core_file: str | None = None,
+    max_depth: int | None = None,
 ) -> Iterator[str]:
     """
     Yield candidate binary file paths one by one from the given source.
@@ -181,7 +182,12 @@ def _iter_binary_paths(
     if glob_pattern:
         full_pattern = str(Path(rootfs_base) / glob_pattern.lstrip("/"))
         logger.debug("glob_scan_start", extra={"pattern": full_pattern})
+        rootfs_depth = len(Path(rootfs_base).parts)
         for match in glob_module.glob(full_pattern, recursive=True):
+            if max_depth is not None:
+                # depth 0 = files directly in rootfs (len - rootfs_depth == 1)
+                if len(Path(match).parts) - rootfs_depth > max_depth + 1:
+                    continue
             logger.debug("glob_candidate", extra={"path": match})
             if Path(match).is_file() and _is_elf(match):
                 yield match
@@ -189,7 +195,10 @@ def _iter_binary_paths(
     if perm:
         mask, value = _parse_perm(perm)
         logger.debug("perm_scan_start", extra={"rootfs": rootfs_base, "perm": perm})
+        rootfs_depth = len(Path(rootfs_base).parts)
         for p in Path(rootfs_base).rglob("*"):
+            if max_depth is not None and len(p.parts) - rootfs_depth > max_depth + 1:
+                continue
             logger.debug("perm_candidate", extra={"path": str(p)})
             if p.is_file():
                 try:
@@ -204,7 +213,11 @@ def _iter_binary_paths(
             logger.debug("dirs_scan_start", extra={"dir": str(scan_dir)})
             if not scan_dir.is_dir():
                 continue
+            scan_depth = len(scan_dir.parts)
             for p in scan_dir.rglob("*"):
+                # depth 0 = files directly in scan_dir (len(p.parts) - scan_depth == 1)
+                if max_depth is not None and len(p.parts) - scan_depth > max_depth + 1:
+                    continue
                 logger.debug("dirs_candidate", extra={"path": str(p)})
                 if p.is_file() and _is_elf(str(p)):
                     yield str(p)
@@ -323,6 +336,12 @@ async def load(
     load_types: bool = typer.Option(
         False, "--types", "-t", help="Also load DWARF type info and .debug_line mappings"
     ),
+    max_bin: int | None = typer.Option(
+        None, "--maxbin", help="Stop after loading N binaries (useful for testing)"
+    ),
+    max_depth: int | None = typer.Option(
+        None, "--maxdepth", help="Max directory depth to recurse into (0 = only top-level dir)"
+    ),
 ) -> None:
     """
     Load binaries from rootfs into the rootfs database.
@@ -339,6 +358,7 @@ async def load(
         baldrick load --rootfs /target --maps /proc/12345/maps
         baldrick load --rootfs /target --pid 12345
         baldrick load --rootfs /target --glob '**/*.so' --types
+        baldrick load --rootfs /target --dirs /usr/lib --maxdepth 0 --maxbin 100
     """
     sources = [glob_pattern, perm, files_spec, dirs, maps_file, pid, core_file]
     if not any(s is not None for s in sources):
@@ -367,12 +387,16 @@ async def load(
                 maps_file=maps_file,
                 pid=pid,
                 core_file=core_file,
+                max_depth=max_depth,
             ):
                 seen.add(raw_path)
                 collect_progress.update(
                     scan_task,
                     description=f"Scanning… {len(seen)} found",
                 )
+                if max_bin is not None and len(seen) >= max_bin:
+                    collect_progress.update(scan_task, description=f"Scanning… {len(seen)} found (--maxbin limit reached)")
+                    break
 
         binary_paths = sorted(seen)
 
@@ -392,24 +416,17 @@ async def load(
         # subprocess parallelism.  We use a separate, coarser concurrency limit
         # here so we don't queue up thousands of DB sessions at once.
         concurrency = min(config.max_subprocess_workers, len(binary_paths))
-        binary_sem = asyncio.Semaphore(concurrency)
 
-        loaded = skipped = failed = active = 0
-        _lock = asyncio.Lock()
-
-        # Per-phase timing accumulators (seconds, float)
-        t_sem_wait = t_load_binary = t_dwarf = t_debug_line = t_write_lock = t_write_cs = 0.0
+        failed = active = 0
+        t_io = 0.0
         tasks_done = 0
 
-        # Producer-consumer queue for streaming DWARF/debugline writes
-        # maxsize=64 gives ~6 MB backpressure ceiling (64 × 500 rows × ~200 bytes)
-        db_queue: asyncio.Queue = asyncio.Queue(maxsize=64) if load_types else None  # type: ignore[assignment]
-        # Live counters updated by run_db_writer and read by progress refresh
-        _live: dict[str, int] = {"types": 0, "lines": 0, "retries": 0, "q": 0}
-        writer_task = (
-            asyncio.create_task(rootfs_db_obj.run_db_writer(db_queue, _live))
-            if load_types
-            else None
+        # payload_queue: workers produce BinaryPayload, writer consumes.
+        # maxsize=64 bounds memory: 64 payloads × ~500KB worst case ≈ 32 MB.
+        payload_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        _live: dict[str, int] = {"loaded": 0, "skipped": 0, "types": 0, "lines": 0, "retries": 0, "t_wait": 0, "t_write": 0}
+        writer_task = asyncio.create_task(
+            rootfs_db_obj.run_payload_writer(payload_queue, _live)
         )
 
         progress = Progress(
@@ -428,128 +445,106 @@ async def load(
         )
 
         def _update_description() -> None:
-            """Refresh progress description with current active/limit/writer counters."""
-            if load_types and db_queue is not None:
-                q_size = db_queue.qsize()
-                _live["q"] = q_size
-                extra = (
-                    f", q={q_size}/64"
-                    f" types={_live['types']} lines={_live['lines']}"
-                    + (f" [red]retries={_live['retries']}[/red]" if _live["retries"] else "")
-                )
-            else:
-                extra = ""
+            q_size = payload_queue.qsize()
+            tw, twr = _live["t_wait"], _live["t_write"]
+            writer_info = f" db={twr}ms idle={tw}ms" if (tw or twr) else ""
+            extra = (
+                f", q={q_size}/64"
+                f" types={_live['types']} lines={_live['lines']}"
+                + writer_info
+                + (f" [red]retries={_live['retries']}[/red]" if _live["retries"] else "")
+            ) if load_types else writer_info
             progress.update(
                 task_id,
                 description=(
                     f"Loading binaries [dim]({active}/{concurrency} active,"
-                    f" {loaded} new, {skipped} cached{extra})[/dim]"
+                    f" {_live['loaded']} new, {_live['skipped']} cached{extra})[/dim]"
                 ),
             )
 
         async def _load_one(path: str) -> None:
-            nonlocal loaded, skipped, failed, active
-            nonlocal t_sem_wait, t_load_binary, t_dwarf, t_debug_line, t_write_lock, t_write_cs, tasks_done
+            nonlocal failed, active, t_io, tasks_done
+            active += 1
+            _update_description()
+            try:
+                _t1 = time.monotonic()
+                payload = await rootfs_db_obj.collect_binary_payload(
+                    path, rootfs=rootfs, debugfs=debugfs or rootfs,
+                    load_types=load_types,
+                )
+                t_io += time.monotonic() - _t1
+                tasks_done += 1
+                await payload_queue.put(payload)
+            except Exception as e:
+                failed += 1
+                tasks_done += 1
+                progress.console.print(f"  [yellow]Skip {Path(path).name}: {e}[/yellow]")
+            finally:
+                active -= 1
+                _update_description()
+                progress.advance(task_id)
 
-            # Measure wait for binary_sem slot
-            _t0 = time.monotonic()
-            async with binary_sem:
-                _dt_sem = time.monotonic() - _t0
-                async with _lock:
-                    active += 1
-                    t_sem_wait += _dt_sem
-                    _update_description()
-                try:
-                    _t1 = time.monotonic()
-                    _, is_new, _ = await rootfs_db_obj.load_binary(
-                        path, rootfs=rootfs, debugfs=debugfs or rootfs
-                    )
-                    _dt_lb = time.monotonic() - _t1
+        async def _bounded_pool(paths: list[str], limit: int) -> None:
+            """Run _load_one for all paths with at most `limit` truly concurrent tasks.
 
-                    _dt_dw = _dt_dl = 0.0
-                    if load_types and db_queue is not None:
-                        try:
-                            _t2 = time.monotonic()
-                            await asyncio.gather(
-                                rootfs_db_obj.load_dwarf_types_streaming(path, db_queue),
-                                rootfs_db_obj.load_debug_line_streaming(path, db_queue),
-                            )
-                            _dt_both = time.monotonic() - _t2
-                            _dt_dw = _dt_dl = _dt_both
-                        except Exception as dwarf_err:
-                            logger.debug(
-                                "dwarf_load_failed",
-                                extra={"path": path, "error": str(dwarf_err)},
-                            )
+            Unlike gather+semaphore (which creates N coroutines upfront), this
+            only creates a new task when a slot becomes free — no thundering herd,
+            no N×overhead for 44k items.
+            """
+            it = iter(paths)
+            running: set[asyncio.Task] = set()
 
-                    async with _lock:
-                        if is_new:
-                            loaded += 1
-                        else:
-                            skipped += 1
-                        t_load_binary += _dt_lb
-                        t_dwarf += _dt_dw
-                        t_debug_line += _dt_dl
-                        tasks_done += 1
-                except Exception as e:
-                    async with _lock:
-                        failed += 1
-                        tasks_done += 1
-                    progress.console.print(f"  [yellow]Skip {Path(path).name}: {e}[/yellow]")
-                finally:
-                    async with _lock:
-                        active -= 1
-                        _update_description()
-                    progress.advance(task_id)
+            for path in it:
+                if len(running) >= limit:
+                    # Wait for any one task to finish before launching another
+                    done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+                t = asyncio.create_task(_load_one(path))
+                running.add(t)
+
+            # Drain remaining tasks
+            if running:
+                await asyncio.wait(running)
 
         async def _refresh_loop() -> None:
-            """Refresh progress description every second with live writer stats."""
             while True:
                 await asyncio.sleep(1.0)
-                async with _lock:
-                    _update_description()
+                _update_description()
 
         with progress:
             _refresh_task = asyncio.create_task(_refresh_loop())
             try:
-                await asyncio.gather(*[_load_one(p) for p in binary_paths])
+                await _bounded_pool(binary_paths, concurrency)
             finally:
                 _refresh_task.cancel()
 
-        # All producers done — signal writer to flush and exit
-        writer_stats: dict = {}
-        if load_types and db_queue is not None and writer_task is not None:
-            await db_queue.put(DB_SENTINEL)
-            writer_stats = await writer_task
+        await payload_queue.put(PAYLOAD_SENTINEL)
+        writer_stats = await writer_task
 
-        # Expose write-lock stats from RootfsDatabase if available
-        wl_stats = getattr(rootfs_db_obj, "_write_lock_stats", None)
-        if wl_stats:
-            t_write_lock = wl_stats.get("wait", 0.0)
-            t_write_cs = wl_stats.get("held", 0.0)
-
+        loaded = _live["loaded"]
+        skipped = _live["skipped"]
         console.print(
             f"[green]✓ Done: {loaded} loaded, {skipped} already cached, {failed} failed[/green]"
         )
 
-        # Timing report
         n = max(tasks_done, 1)
         timing_table = Table(title="Phase timing (wall-clock, cumulative across all tasks)", box=None, show_header=True)
         timing_table.add_column("Phase", style="bold")
         timing_table.add_column("Total (s)", justify="right")
         timing_table.add_column("Avg/task (ms)", justify="right")
         timing_table.add_column("Note", style="dim")
-        timing_table.add_row("binary_sem wait",    f"{t_sem_wait:.2f}",   f"{t_sem_wait/n*1000:.0f}",   "waiting for concurrency slot")
-        timing_table.add_row("load_binary I/O",    f"{t_load_binary:.2f}", f"{t_load_binary/n*1000:.0f}", "md5 + readelf + objdump×2")
-        if load_types:
-            timing_table.add_row("dwarf+debug_line",   f"{t_dwarf:.2f}",  f"{t_dwarf/n*1000:.0f}",      "objdump --dwarf + readelf decodedline (parallel)")
-            if writer_stats:
-                wt = writer_stats.get("written_types", 0)
-                wl = writer_stats.get("written_lines", 0)
-                timing_table.add_row("db writer",  "—", "—", f"{wt} types, {wl} debug_line rows committed")
-        if wl_stats:
-            timing_table.add_row("write_lock wait",  f"{t_write_lock:.2f}", f"{t_write_lock/n*1000:.0f}", "waiting for DB write serialisation")
-            timing_table.add_row("write_lock held",  f"{t_write_cs:.2f}",   f"{t_write_cs/n*1000:.0f}",  "time inside critical section")
+        w_queue  = writer_stats.get("t_queue_ms", 0)
+        w_apply  = writer_stats.get("t_apply_ms", 0)
+        w_commit = writer_stats.get("t_commit_ms", 0)
+        commits  = writer_stats.get("commits", 0)
+        avg_commit_ms = f"{w_commit // commits}ms/commit" if commits else "—"
+        timing_table.add_row("collect I/O",       f"{t_io:.2f}",        f"{t_io/n*1000:.0f}", "md5 + readelf + objdump" + (" + DWARF" if load_types else ""))
+        timing_table.add_row("db INSERT (SQL)",   f"{w_apply/1000:.2f}",  "—",
+                             f"{writer_stats.get('loaded',0)} loaded, {writer_stats.get('skipped',0)} skipped, "
+                             f"{writer_stats.get('types',0)} types, {writer_stats.get('lines',0)} lines")
+        timing_table.add_row("db COMMIT",         f"{w_commit/1000:.2f}", "—",
+                             f"{commits} commits · {avg_commit_ms}")
+        timing_table.add_row("db writer idle",    f"{w_queue/1000:.2f}",  "—",
+                             "waiting for next payload from workers")
         console.print(timing_table)
         await manager.close()
 
@@ -579,9 +574,12 @@ async def load_types(
     try:
         await manager.create_all()
         rootfs_db_obj = RootfsDatabase(manager, config)
-        tc, mc = await rootfs_db_obj.load_dwarf_types(binary)
-        lc = await rootfs_db_obj.load_debug_line(binary)
-        console.print(f"[green]✓ {binary}: {tc} types, {mc} members, {lc} line records[/green]")
+        payload = await rootfs_db_obj.collect_binary_payload(binary, rootfs="/", debugfs=None, load_types=True)
+        stats = await rootfs_db_obj.apply_single_payload(payload)
+        console.print(
+            f"[green]✓ {binary}: {stats['types']} types, {stats['members']} members, "
+            f"{stats['lines']} line records[/green]"
+        )
         await manager.close()
 
     except typer.Exit:

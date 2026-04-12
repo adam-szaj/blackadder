@@ -12,7 +12,7 @@ from typing import Optional
 import struct
 
 from pydantic import BaseModel, field_validator
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Index, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 _INT64_MAX = (1 << 63) - 1
@@ -179,7 +179,7 @@ class DwarfType(SQLModel, table=True):
     """
 
     id: int | None = Field(default=None, primary_key=True)
-    binary_id: int = Field(foreign_key="binary.id", index=True)
+    binary_id: int = Field(foreign_key="binary.id")
     die_offset: int                            # Hex offset in .debug_info (unique per binary)
     tag: str = Field(max_length=32)            # "structure_type", "base_type", "typedef", etc.
     name: str | None = Field(default=None, index=True, max_length=256)
@@ -187,7 +187,9 @@ class DwarfType(SQLModel, table=True):
     type_ref: int | None = None                # die_offset of referenced DwarfType (typedef→underlying, pointer→target)
     encoding: str | None = Field(default=None, max_length=32)  # "signed", "unsigned", "float", etc. (base_type only)
 
-    __table_args__ = (UniqueConstraint("binary_id", "die_offset", name="uq_dwarftype_binary_offset"),)
+    # Composite index covers both binary_id lookups and die_offset resolution.
+    # No UNIQUE — parser deduplicates via seen-set; UNIQUE would cost ~2x INSERT time.
+    __table_args__ = (Index("ix_dwarftype_binary_die", "binary_id", "die_offset"),)
 
     members: list["DwarfMember"] = Relationship(back_populates="dwarf_type")
 
@@ -222,14 +224,11 @@ class DebugLine(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
-    source_file: str = Field(index=True, max_length=512)
+    source_file: str = Field(max_length=512)
     line_number: int
     address: int = Field(index=True)
-
-    __table_args__ = (UniqueConstraint(
-        "binary_id", "source_file", "line_number", "address",
-        name="uq_debugline",
-    ),)
+    # No UNIQUE — _sync_parse_debug_line deduplicates via seen-set before INSERT.
+    # UNIQUE on (binary_id, source_file, line_number, address) cost ~6x INSERT time.
 
 
 class BinaryLocator(SQLModel, table=True):
