@@ -10,6 +10,8 @@ import hashlib
 import logging
 import os
 import time
+from dataclasses import dataclass, field
+from typing import Literal
 
 from sqlalchemy import text as _SA_TEXT
 from sqlmodel import select
@@ -20,6 +22,20 @@ from blackadder.models import Binary, BinaryLocator, DebugLine, DwarfMember, Dwa
 from .base import AsyncDatabaseManager
 
 logger = logging.getLogger("blackadder.db.rootfs")
+
+
+@dataclass
+class InsertBatch:
+    """A chunk of parsed rows destined for the DB writer."""
+    kind: Literal["dwarf", "debugline"]
+    binary_id: int
+    rows: list[dict]
+    member_rows: list[dict] = field(default_factory=list)
+    first_chunk: bool = False  # triggers idempotency check in writer
+
+
+# Sentinel: put on the queue to signal end-of-stream to run_db_writer
+DB_SENTINEL: InsertBatch | None = None
 
 
 class RootfsDatabase:
@@ -117,97 +133,105 @@ class RootfsDatabase:
             _wl_wait = time.monotonic() - _wl_t0
             self._write_lock_stats["wait"] += _wl_wait
             _wl_cs_t0 = time.monotonic()
-            async with self.manager.get_session() as session:
-                # Check if binary already known by MD5
-                stmt = select(Binary).where(Binary.md5sum == md5sum)
-                result = await session.execute(stmt)
-                existing = result.scalars().first()
+            for _lb_attempt in range(8):
+                try:
+                    async with self.manager.get_session() as session:
+                        # Check if binary already known by MD5
+                        stmt = select(Binary).where(Binary.md5sum == md5sum)
+                        result = await session.execute(stmt)
+                        existing = result.scalars().first()
 
-                if existing:
-                    # Register this path if not yet known; update debug_file if now resolved
-                    loc_stmt = select(BinaryLocator).where(BinaryLocator.path == binary_path)
-                    loc_result = await session.execute(loc_stmt)
-                    locator = loc_result.scalars().first()
-                    if not locator:
-                        session.add(BinaryLocator(
-                            path=binary_path, md5sum=md5sum, mtime=mtime,
-                            debug_file=debug_file_path,
-                        ))
-                        await session.commit()
-                    elif debug_file_path and not locator.debug_file:
-                        locator.debug_file = debug_file_path
-                        await session.commit()
+                        if existing:
+                            # Register this path if not yet known; update debug_file if now resolved
+                            loc_stmt = select(BinaryLocator).where(BinaryLocator.path == binary_path)
+                            loc_result = await session.execute(loc_stmt)
+                            locator = loc_result.scalars().first()
+                            if not locator:
+                                session.add(BinaryLocator(
+                                    path=binary_path, md5sum=md5sum, mtime=mtime,
+                                    debug_file=debug_file_path,
+                                ))
+                                await session.commit()
+                            elif debug_file_path and not locator.debug_file:
+                                locator.debug_file = debug_file_path
+                                await session.commit()
 
-                    sym_check = await session.execute(
-                        select(Symbol).where(Symbol.binary_id == existing.id).limit(1)
-                    )
-                    has_symbols = sym_check.scalars().first() is not None
-
-                    # Skip reload only if symbols exist AND we have no better source
-                    if has_symbols and sym_source == binary_path:
-                        return existing, False, debug_file_path
-
-                    # Symbols missing OR debug file now available — DELETE + INSERT
-                    if has_symbols:
-                        await session.execute(
-                            Symbol.__table__.delete().where(Symbol.binary_id == existing.id)
-                        )
-                        logger.debug(
-                            "symbols_replacing_with_debug_file",
-                            extra={"binary": binary_path, "sym_source": sym_source},
-                        )
-                    else:
-                        logger.debug(
-                            "symbols_missing_loading",
-                            extra={"binary": binary_path, "sym_source": sym_source},
-                        )
-                    binary_id = existing.id
-                else:
-                    # New binary — store metadata
-                    binary = Binary(md5sum=md5sum, name=name, debug_link=debug_link_name)
-                    session.add(binary)
-                    await session.flush()
-                    binary_id = binary.id
-
-                    # Sections (already fetched above)
-                    for idx, (sec_name, sec) in enumerate(sections_data.items()):
-                        session.add(
-                            SectionHeader(
-                                binary_id=binary_id,
-                                idx=idx,
-                                name=sec_name[:32],
-                                size=sec["size"],
-                                vma=sec["vma"],
-                                lma=sec["lma"],
-                                off=sec["off"],
-                                align=sec["align"],
+                            sym_check = await session.execute(
+                                select(Symbol).where(Symbol.binary_id == existing.id).limit(1)
                             )
+                            has_symbols = sym_check.scalars().first() is not None
+
+                            # Skip reload only if symbols exist AND we have no better source
+                            if has_symbols and sym_source == binary_path:
+                                return existing, False, debug_file_path
+
+                            # Symbols missing OR debug file now available — DELETE + INSERT
+                            if has_symbols:
+                                await session.execute(
+                                    Symbol.__table__.delete().where(Symbol.binary_id == existing.id)
+                                )
+                                logger.debug(
+                                    "symbols_replacing_with_debug_file",
+                                    extra={"binary": binary_path, "sym_source": sym_source},
+                                )
+                            else:
+                                logger.debug(
+                                    "symbols_missing_loading",
+                                    extra={"binary": binary_path, "sym_source": sym_source},
+                                )
+                            binary_id = existing.id
+                        else:
+                            # New binary — store metadata
+                            binary = Binary(md5sum=md5sum, name=name, debug_link=debug_link_name)
+                            session.add(binary)
+                            await session.flush()
+                            binary_id = binary.id
+
+                            # Sections (already fetched above)
+                            for idx, (sec_name, sec) in enumerate(sections_data.items()):
+                                session.add(
+                                    SectionHeader(
+                                        binary_id=binary_id,
+                                        idx=idx,
+                                        name=sec_name[:32],
+                                        size=sec["size"],
+                                        vma=sec["vma"],
+                                        lma=sec["lma"],
+                                        off=sec["off"],
+                                        align=sec["align"],
+                                    )
+                                )
+
+                            session.add(BinaryLocator(
+                                path=binary_path, md5sum=md5sum, mtime=mtime,
+                                debug_file=debug_file_path,
+                            ))
+
+                        # Load symbols (already fetched above) — shared path for new and existing-without-symbols
+                        for sym in syms_data:
+                            session.add(
+                                Symbol(
+                                    binary_id=binary_id,
+                                    address=sym["address"],
+                                    scope=sym["scope"],
+                                    sym_type=sym["sym_type"],
+                                    section=sym["section"],
+                                    size=sym["size"],
+                                    name=sym["name"],
+                                )
+                            )
+                        logger.debug(
+                            "symbols_loaded",
+                            extra={"binary": binary_path, "source": sym_source, "count": len(syms_data)},
                         )
 
-                    session.add(BinaryLocator(
-                        path=binary_path, md5sum=md5sum, mtime=mtime,
-                        debug_file=debug_file_path,
-                    ))
-
-                # Load symbols (already fetched above) — shared path for new and existing-without-symbols
-                for sym in syms_data:
-                    session.add(
-                        Symbol(
-                            binary_id=binary_id,
-                            address=sym["address"],
-                            scope=sym["scope"],
-                            sym_type=sym["sym_type"],
-                            section=sym["section"],
-                            size=sym["size"],
-                            name=sym["name"],
-                        )
-                    )
-                logger.debug(
-                    "symbols_loaded",
-                    extra={"binary": binary_path, "source": sym_source, "count": len(syms_data)},
-                )
-
-                await session.commit()
+                        await session.commit()
+                    break  # success
+                except Exception as _e:
+                    if ("database is locked" in str(_e) or "database table is locked" in str(_e)) and _lb_attempt < 7:
+                        await asyncio.sleep(0.05 * (2 ** _lb_attempt))
+                    else:
+                        raise
             self._write_lock_stats["held"] += time.monotonic() - _wl_cs_t0
 
         # Re-fetch outside the session to avoid detached state
@@ -520,3 +544,303 @@ class RootfsDatabase:
 
         logger.debug("debug_line_loaded", extra={"binary": binary_path, "count": len(seen)})
         return len(seen)
+
+    # -------------------------------------------------------------------------
+    # Streaming producer-consumer API
+    # -------------------------------------------------------------------------
+
+    async def load_dwarf_types_streaming(
+        self,
+        binary_path: str,
+        queue: asyncio.Queue,
+    ) -> None:
+        """
+        Parse DWARF types from binary and enqueue InsertBatch messages.
+
+        Runs objdump + parsing in a thread pool worker via asyncio.to_thread so
+        multiple binaries can be parsed in parallel on different CPU cores
+        (the GIL is released during subprocess I/O in each thread).
+        Does NOT write to DB — that is done by run_db_writer().
+        """
+        from blackadder.binutils.dwarf_parser import _sync_parse_dwarf_types
+        from blackadder.binutils.parser import BinToolsParser
+
+        binary_id = await self._get_binary_id_for_path(binary_path)
+        if binary_id is None:
+            logger.debug("dwarf_streaming_skip_not_loaded", extra={"binary": binary_path})
+            return
+
+        bintool = BinToolsParser(self.config)
+        try:
+            # Acquire subprocess semaphore before entering the thread so the
+            # concurrency cap applies to threads the same way it did to coroutines.
+            async with bintool.subprocess_sem:
+                all_types, all_members = await asyncio.to_thread(
+                    _sync_parse_dwarf_types,
+                    binary_path,
+                    self.config.objdump_path,
+                )
+        except Exception as e:
+            logger.warning("dwarf_streaming_failed", extra={"binary": binary_path, "error": str(e)})
+            return
+
+        if not all_types and not all_members:
+            return
+
+        # Enqueue types in chunks; attach all members to the final chunk so
+        # all die_offset→id mappings are resolved before members are inserted.
+        chunk_size = 2000
+        first = True
+        if all_types:
+            for i in range(0, len(all_types), chunk_size):
+                is_last = (i + chunk_size >= len(all_types))
+                await queue.put(InsertBatch(
+                    kind="dwarf",
+                    binary_id=binary_id,
+                    rows=all_types[i:i + chunk_size],
+                    member_rows=all_members if is_last else [],
+                    first_chunk=first,
+                ))
+                first = False
+        elif all_members:
+            # No types but members exist (unusual); send members alone
+            await queue.put(InsertBatch(
+                kind="dwarf",
+                binary_id=binary_id,
+                rows=[],
+                member_rows=all_members,
+                first_chunk=True,
+            ))
+
+    async def load_debug_line_streaming(
+        self,
+        binary_path: str,
+        queue: asyncio.Queue,
+    ) -> None:
+        """
+        Parse debug line records from binary and enqueue InsertBatch messages.
+
+        Runs readelf + parsing in a thread pool worker for multi-core parallelism.
+        """
+        from blackadder.binutils.dwarf_parser import _sync_parse_debug_line
+        from blackadder.binutils.parser import BinToolsParser
+
+        binary_id = await self._get_binary_id_for_path(binary_path)
+        if binary_id is None:
+            return
+
+        bintool = BinToolsParser(self.config)
+        try:
+            async with bintool.subprocess_sem:
+                records = await asyncio.to_thread(
+                    _sync_parse_debug_line,
+                    binary_path,
+                    self.config.readelf_path,
+                )
+        except Exception as e:
+            logger.warning("debugline_streaming_failed", extra={"binary": binary_path, "error": str(e)})
+            return
+
+        if not records:
+            return
+
+        chunk_size = 2000
+        first = True
+        for i in range(0, len(records), chunk_size):
+            await queue.put(InsertBatch(
+                kind="debugline",
+                binary_id=binary_id,
+                rows=records[i:i + chunk_size],
+                first_chunk=first,
+            ))
+            first = False
+
+    async def run_db_writer(
+        self,
+        queue: asyncio.Queue,
+        live: dict[str, int] | None = None,
+    ) -> dict[str, int]:
+        """
+        Single-consumer DB writer task for streaming load.
+
+        Reads InsertBatch messages from queue, writes to DB using raw SQL.
+        No _write_lock needed — this is the only writer for dwarf/debugline tables.
+        WAL checkpoint issued every 50 commits to keep WAL file small.
+
+        live: optional shared dict updated in-place with running counters:
+            types, lines, retries — read by CLI progress refresh.
+
+        Send DB_SENTINEL (None) to signal end of stream.
+
+        Returns stats dict with written_types, written_members, written_lines, commits.
+        """
+        written_types = written_members = written_lines = commits = 0
+        # binary_id sets for idempotency — checked only on first_chunk
+        already_dwarf: set[int] = set()
+        already_debugline: set[int] = set()
+        # Per-binary die_offset → db id maps (needed for member linkage across chunks)
+        die_to_id: dict[int, dict[int, int]] = {}  # binary_id → {die_offset: db_id}
+
+        while True:
+            # Block waiting for the first batch, then drain up to 32 more
+            # without waiting — write them all in a single transaction.
+            batch = await queue.get()
+            if batch is DB_SENTINEL:
+                break
+
+            pending: list = [batch]
+            while len(pending) < 8:
+                try:
+                    nxt = queue.get_nowait()
+                    if nxt is DB_SENTINEL:
+                        # Put sentinel back so the outer loop can see it
+                        await queue.put(DB_SENTINEL)
+                        break
+                    pending.append(nxt)
+                except asyncio.QueueEmpty:
+                    break
+
+            # Retry loop: SQLite "database is locked" can happen when load_binary
+            # holds a write transaction concurrently.  WAL + busy_timeout handle
+            # most cases at the driver level, but aiosqlite sometimes raises before
+            # the timeout kicks in.  Retry up to 8 times with exponential backoff.
+            _max_attempts = 8
+            for _attempt in range(_max_attempts):
+                try:
+                    async with self.manager.engine.begin() as conn:
+                        for b in pending:
+                            if b.kind == "dwarf":
+                                if b.first_chunk:
+                                    row = await conn.execute(
+                                        _SA_TEXT("SELECT 1 FROM dwarftype WHERE binary_id=:bid LIMIT 1"),
+                                        {"bid": b.binary_id},
+                                    )
+                                    if row.first() is not None:
+                                        already_dwarf.add(b.binary_id)
+                                        logger.debug("dwarf_writer_skip_existing", extra={"binary_id": b.binary_id})
+
+                                if b.binary_id in already_dwarf:
+                                    continue
+
+                                if b.rows:
+                                    await conn.execute(
+                                        _SA_TEXT(
+                                            "INSERT OR IGNORE INTO dwarftype"
+                                            " (binary_id, die_offset, tag, name, byte_size, type_ref, encoding)"
+                                            " VALUES (:binary_id, :die_offset, :tag, :name,"
+                                            " :byte_size, :type_ref, :encoding)"
+                                        ),
+                                        [{"binary_id": b.binary_id, **r} for r in b.rows],
+                                    )
+                                    written_types += len(b.rows)
+
+                                    rows = await conn.execute(
+                                        _SA_TEXT("SELECT id, die_offset FROM dwarftype WHERE binary_id=:bid"),
+                                        {"bid": b.binary_id},
+                                    )
+                                    if b.binary_id not in die_to_id:
+                                        die_to_id[b.binary_id] = {}
+                                    die_to_id[b.binary_id].update({r.die_offset: r.id for r in rows})
+
+                                if b.member_rows:
+                                    d2i = die_to_id.get(b.binary_id, {})
+                                    member_params = [
+                                        {
+                                            "type_id": d2i[m["parent_die_offset"]],
+                                            "name": m.get("name"),
+                                            "byte_offset": m["byte_offset"],
+                                            "member_type_ref": m["member_type_ref"],
+                                        }
+                                        for m in b.member_rows
+                                        if m["parent_die_offset"] in d2i
+                                    ]
+                                    if member_params:
+                                        await conn.execute(
+                                            _SA_TEXT(
+                                                "INSERT INTO dwarfmember"
+                                                " (type_id, name, byte_offset, member_type_ref)"
+                                                " VALUES (:type_id, :name, :byte_offset, :member_type_ref)"
+                                            ),
+                                            member_params,
+                                        )
+                                        written_members += len(member_params)
+
+                            elif b.kind == "debugline":
+                                if b.first_chunk:
+                                    row = await conn.execute(
+                                        _SA_TEXT("SELECT 1 FROM debugline WHERE binary_id=:bid LIMIT 1"),
+                                        {"bid": b.binary_id},
+                                    )
+                                    if row.first() is not None:
+                                        already_debugline.add(b.binary_id)
+
+                                if b.binary_id in already_debugline:
+                                    continue
+
+                                if b.rows:
+                                    await conn.execute(
+                                        _SA_TEXT(
+                                            "INSERT OR IGNORE INTO debugline"
+                                            " (binary_id, source_file, line_number, address)"
+                                            " VALUES (:binary_id, :source_file, :line_number, :address)"
+                                        ),
+                                        [{"binary_id": b.binary_id, **r} for r in b.rows],
+                                    )
+                                    written_lines += len(b.rows)
+
+                        commits += 1
+                        if live is not None:
+                            live["types"] = written_types
+                            live["lines"] = written_lines
+                    break  # transaction committed — exit retry loop
+
+                except Exception as e:
+                    _is_locked = "database is locked" in str(e) or "database table is locked" in str(e)
+                    if _is_locked and _attempt < _max_attempts - 1:
+                        _delay = 0.05 * (2 ** _attempt)  # 50ms, 100ms, 200ms … 6.4s
+                        if live is not None:
+                            live["retries"] = live.get("retries", 0) + 1
+                        logger.debug(
+                            "db_writer_retry",
+                            extra={"attempt": _attempt + 1, "delay": _delay,
+                                   "batches": len(pending)},
+                        )
+                        await asyncio.sleep(_delay)
+                    else:
+                        logger.error(
+                            "db_writer_error",
+                            extra={"batches": len(pending),
+                                   "attempt": _attempt + 1, "error": str(e)},
+                        )
+                        break
+
+            # WAL checkpoint outside any transaction, every 50 commits
+            if commits > 0 and commits % 50 == 0:
+                try:
+                    async with self.manager.engine.connect() as ck_conn:
+                        await ck_conn.execute(_SA_TEXT("PRAGMA wal_checkpoint(PASSIVE)"))
+                except Exception:
+                    pass
+
+        # Final checkpoint
+        try:
+            async with self.manager.engine.connect() as ck_conn:
+                await ck_conn.execute(_SA_TEXT("PRAGMA wal_checkpoint(PASSIVE)"))
+        except Exception:
+            pass
+
+        logger.debug(
+            "db_writer_done",
+            extra={
+                "written_types": written_types,
+                "written_members": written_members,
+                "written_lines": written_lines,
+                "commits": commits,
+            },
+        )
+        return {
+            "written_types": written_types,
+            "written_members": written_members,
+            "written_lines": written_lines,
+            "commits": commits,
+        }

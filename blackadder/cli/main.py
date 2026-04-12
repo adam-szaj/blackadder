@@ -28,7 +28,7 @@ logger = logging.getLogger("blackadder.cli")
 from blackadder.binutils import init_parser, parse_backtrace_auto
 from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
-from blackadder.db.rootfs import RootfsDatabase
+from blackadder.db.rootfs import DB_SENTINEL, RootfsDatabase
 from blackadder.logging_config import setup_logging
 from blackadder.theme import ColorTheme, column_style, format_value, load_theme
 
@@ -401,6 +401,17 @@ async def load(
         t_sem_wait = t_load_binary = t_dwarf = t_debug_line = t_write_lock = t_write_cs = 0.0
         tasks_done = 0
 
+        # Producer-consumer queue for streaming DWARF/debugline writes
+        # maxsize=64 gives ~6 MB backpressure ceiling (64 × 500 rows × ~200 bytes)
+        db_queue: asyncio.Queue = asyncio.Queue(maxsize=64) if load_types else None  # type: ignore[assignment]
+        # Live counters updated by run_db_writer and read by progress refresh
+        _live: dict[str, int] = {"types": 0, "lines": 0, "retries": 0, "q": 0}
+        writer_task = (
+            asyncio.create_task(rootfs_db_obj.run_db_writer(db_queue, _live))
+            if load_types
+            else None
+        )
+
         progress = Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -417,10 +428,23 @@ async def load(
         )
 
         def _update_description() -> None:
-            """Refresh progress description with current active/limit counters."""
+            """Refresh progress description with current active/limit/writer counters."""
+            if load_types and db_queue is not None:
+                q_size = db_queue.qsize()
+                _live["q"] = q_size
+                extra = (
+                    f", q={q_size}/64"
+                    f" types={_live['types']} lines={_live['lines']}"
+                    + (f" [red]retries={_live['retries']}[/red]" if _live["retries"] else "")
+                )
+            else:
+                extra = ""
             progress.update(
                 task_id,
-                description=f"Loading binaries [dim]({active}/{concurrency} active, {loaded} new, {skipped} cached)[/dim]",
+                description=(
+                    f"Loading binaries [dim]({active}/{concurrency} active,"
+                    f" {loaded} new, {skipped} cached{extra})[/dim]"
+                ),
             )
 
         async def _load_one(path: str) -> None:
@@ -443,14 +467,13 @@ async def load(
                     _dt_lb = time.monotonic() - _t1
 
                     _dt_dw = _dt_dl = 0.0
-                    if load_types:
+                    if load_types and db_queue is not None:
                         try:
                             _t2 = time.monotonic()
                             await asyncio.gather(
-                                rootfs_db_obj.load_dwarf_types(path),
-                                rootfs_db_obj.load_debug_line(path),
+                                rootfs_db_obj.load_dwarf_types_streaming(path, db_queue),
+                                rootfs_db_obj.load_debug_line_streaming(path, db_queue),
                             )
-                            # Split equally (they run concurrently so wall time ≈ max)
                             _dt_both = time.monotonic() - _t2
                             _dt_dw = _dt_dl = _dt_both
                         except Exception as dwarf_err:
@@ -479,8 +502,25 @@ async def load(
                         _update_description()
                     progress.advance(task_id)
 
+        async def _refresh_loop() -> None:
+            """Refresh progress description every second with live writer stats."""
+            while True:
+                await asyncio.sleep(1.0)
+                async with _lock:
+                    _update_description()
+
         with progress:
-            await asyncio.gather(*[_load_one(p) for p in binary_paths])
+            _refresh_task = asyncio.create_task(_refresh_loop())
+            try:
+                await asyncio.gather(*[_load_one(p) for p in binary_paths])
+            finally:
+                _refresh_task.cancel()
+
+        # All producers done — signal writer to flush and exit
+        writer_stats: dict = {}
+        if load_types and db_queue is not None and writer_task is not None:
+            await db_queue.put(DB_SENTINEL)
+            writer_stats = await writer_task
 
         # Expose write-lock stats from RootfsDatabase if available
         wl_stats = getattr(rootfs_db_obj, "_write_lock_stats", None)
@@ -503,6 +543,10 @@ async def load(
         timing_table.add_row("load_binary I/O",    f"{t_load_binary:.2f}", f"{t_load_binary/n*1000:.0f}", "md5 + readelf + objdump×2")
         if load_types:
             timing_table.add_row("dwarf+debug_line",   f"{t_dwarf:.2f}",  f"{t_dwarf/n*1000:.0f}",      "objdump --dwarf + readelf decodedline (parallel)")
+            if writer_stats:
+                wt = writer_stats.get("written_types", 0)
+                wl = writer_stats.get("written_lines", 0)
+                timing_table.add_row("db writer",  "—", "—", f"{wt} types, {wl} debug_line rows committed")
         if wl_stats:
             timing_table.add_row("write_lock wait",  f"{t_write_lock:.2f}", f"{t_write_lock/n*1000:.0f}", "waiting for DB write serialisation")
             timing_table.add_row("write_lock held",  f"{t_write_cs:.2f}",   f"{t_write_cs/n*1000:.0f}",  "time inside critical section")

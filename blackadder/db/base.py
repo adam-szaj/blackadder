@@ -63,6 +63,10 @@ class AsyncDatabaseManager:
         def _set_wal(dbapi_conn, _connection_record):
             dbapi_conn.execute("PRAGMA journal_mode=WAL")
             dbapi_conn.execute("PRAGMA busy_timeout=15000")  # ms
+            # NORMAL is safe with WAL (data survives crash, only last txn may be lost)
+            # and removes the fsync-per-commit bottleneck of the default FULL mode.
+            dbapi_conn.execute("PRAGMA synchronous=NORMAL")
+            dbapi_conn.execute("PRAGMA cache_size=-65536")  # 64 MB page cache
 
         # Session factory for creating new async sessions
         self.session_maker = async_sessionmaker(
