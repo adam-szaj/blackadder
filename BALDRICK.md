@@ -82,6 +82,7 @@ Does not create a process snapshot.
 parameters:
     [ --rootfs | -R <rootfs> ]
     [ --debugfs | -D <debugfs> ]
+    [ --types | -t ]            - also load DWARF type info and .debug_line mappings
 *mandatory one of the following:*
     [ --glob | -g <pattern> ] - load binaries matching given glob pattern
     [ --perm | -P <permission> ] - load binaries matching given permission (e.g. 0755, u+x)
@@ -91,6 +92,38 @@ parameters:
     [ --coredump | -C <coredump-file> ]
 
 <file-list-spec> : colon separated list of files | @file-name-with-list-of-files (one path per line)
+
+
+**load-types <parameters>**
+
+Load DWARF type definitions and `.debug_line` source line→address mappings from a
+single binary that is already indexed (run `load` first). Idempotent — safe to
+re-run; skips if already loaded.
+
+parameters:
+    --binary | -b <binary-path>   - path to the binary file
+
+Example:
+    baldrick --db session.db load-types --binary /usr/lib/x86_64-linux-gnu/libpthread.so.0
+
+
+**cast-mem <parameters>**
+
+Interpret raw memory bytes as a named C struct/typedef from an indexed binary.
+Recursively expands nested structs. Outputs a table with byte offsets, field paths,
+types, and hex + decimal values.
+
+parameters:
+    --type <name>           - struct/typedef name (e.g. pthread_mutex_t)
+    --binary | -b <name>    - binary name as stored in DB (e.g. libc.so.6)
+    --mem <hex>|@<file>     - memory bytes as hex string, or @path to binary dump
+    [ --addr <0xOFFSET> ]   - byte offset within the dump where the struct starts (default: 0x0)
+
+Example:
+    baldrick --db session.db cast-mem --type pthread_mutex_t --binary libc.so.6 \
+        --mem 0000000001000000000000000000000000000000
+    baldrick --db session.db cast-mem --type pthread_mutex_t --binary libc.so.6 \
+        --mem @/tmp/memdump.bin --addr 0x1000
 
 **load-process <parameters>**
 
@@ -211,6 +244,10 @@ Built-in queries:
     symbol-cache binary=NAME    Symbol cache entries for binary
     symbol-cache-stats          Symbol cache hit counts per binary
     deadlock-threads id=N       Threads likely blocked on a futex/mutex
+    types        binary=NAME    Structs/unions defined in a binary (requires load-types)
+    struct       name=NAME      Fields of a named struct/union with byte offsets
+    type-offset  name=NAME offset=N  Field at or just before byte offset N in a struct
+    line2addr    binary=NAME file=F line=N  Addresses for a source file:line (reverse addr2line)
 
 parameters:
     <name>                      - built-in query name, 'list', or first arg as sql=...

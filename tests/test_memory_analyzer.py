@@ -5,16 +5,23 @@ Tests region classification, anomaly detection, and corruption detection.
 """
 
 import pytest
+from blackadder.config import BlackadderConfig
 from blackadder.memory_analyzer import MemoryAnalyzer
 from blackadder.models import MemoryRegionType
+
+
+@pytest.fixture
+def analyzer():
+    """MemoryAnalyzer instance for tests that call instance methods."""
+    return MemoryAnalyzer(BlackadderConfig())
 
 
 class TestClassifyRegion:
     """Test memory region classification."""
 
-    def test_classify_heap_explicit_marker(self):
+    def test_classify_heap_explicit_marker(self, analyzer):
         """Test classifying heap with explicit [heap] marker."""
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = analyzer.classify_region(
             pathname="[heap]",
             start_addr=0x1000000,
             end_addr=0x2000000,
@@ -25,9 +32,9 @@ class TestClassifyRegion:
         assert region_type == MemoryRegionType.HEAP
         assert confidence == 0.99
 
-    def test_classify_stack_explicit_marker(self):
+    def test_classify_stack_explicit_marker(self, analyzer):
         """Test classifying stack with explicit [stack] marker."""
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = analyzer.classify_region(
             pathname="[stack]",
             start_addr=0x7FFFFF000000,
             end_addr=0x7FFFFFFFF000,
@@ -38,9 +45,9 @@ class TestClassifyRegion:
         assert region_type == MemoryRegionType.STACK
         assert confidence == 0.99
 
-    def test_classify_vdso(self):
+    def test_classify_vdso(self, analyzer):
         """Test classifying VDSO region."""
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = analyzer.classify_region(
             pathname="[vdso]",
             start_addr=0x7FFF0000,
             end_addr=0x7FFFF000,
@@ -51,9 +58,9 @@ class TestClassifyRegion:
         assert region_type == MemoryRegionType.VDSO
         assert confidence == 0.98
 
-    def test_classify_vsyscall(self):
+    def test_classify_vsyscall(self, analyzer):
         """Test classifying vsyscall region."""
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = analyzer.classify_region(
             pathname="[vsyscall]",
             start_addr=0xFFFFFFFFFF600000,
             end_addr=0xFFFFFFFFFF601000,
@@ -64,9 +71,9 @@ class TestClassifyRegion:
         assert region_type == MemoryRegionType.VSYSCALL
         assert confidence == 0.98
 
-    def test_classify_library_executable(self):
+    def test_classify_library_executable(self, analyzer):
         """Test classifying executable library."""
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = analyzer.classify_region(
             pathname="/lib/libc.so.6",
             start_addr=0x7F0000000000,
             end_addr=0x7F0001000000,
@@ -77,9 +84,9 @@ class TestClassifyRegion:
         assert region_type == MemoryRegionType.MMAP
         assert confidence >= 0.85
 
-    def test_classify_anonymous_writable(self):
+    def test_classify_anonymous_writable(self, analyzer):
         """Test classifying anonymous writable region (likely heap)."""
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = analyzer.classify_region(
             pathname="",
             start_addr=0x1000000,
             end_addr=0x2000000,
@@ -90,14 +97,14 @@ class TestClassifyRegion:
         assert region_type == MemoryRegionType.ANON
         # Could be classified as HEAP with lower confidence in some cases
 
-    def test_classify_stack_by_register(self):
+    def test_classify_stack_by_register(self, analyzer):
         """Test stack detection via register state (RSP)."""
         register_state = {
             "rsp": 0x7FFFFFFFDE00,
             "rbp": 0x7FFFFFFFDE10,
         }
 
-        region_type, confidence = MemoryAnalyzer.classify_region(
+        region_type, confidence = analyzer.classify_region(
             pathname="",
             start_addr=0x7FFFFFE00000,
             end_addr=0x8000000000000,
@@ -109,10 +116,10 @@ class TestClassifyRegion:
         assert region_type == MemoryRegionType.STACK
         assert confidence == 0.95
 
-    def test_classify_jit_region(self):
+    def test_classify_jit_region(self, analyzer):
         """Test classifying JIT region (RWX anonymous)."""
-        region_type, confidence = MemoryAnalyzer.classify_region(
-            pathname="",
+        region_type, confidence = analyzer.classify_region(
+            pathname="[anon]",
             start_addr=0x3000000,
             end_addr=0x4000000,
             perms="rwxp",
@@ -254,9 +261,9 @@ class TestCheckCorruptionMarkers:
 class TestAnalyzeMemoryRegion:
     """Test full region analysis."""
 
-    def test_analyze_heap_region(self):
+    def test_analyze_heap_region(self, analyzer):
         """Test analyzing a heap region."""
-        analysis = MemoryAnalyzer.analyze_memory_region(
+        analysis = analyzer.analyze_memory_region(
             pathname="[heap]",
             start_addr=0x1000000,
             end_addr=0x2000000,
@@ -270,9 +277,9 @@ class TestAnalyzeMemoryRegion:
         assert analysis["is_executable"] is False
         assert analysis["likely_corrupted"] is False
 
-    def test_analyze_suspicious_heap(self):
+    def test_analyze_suspicious_heap(self, analyzer):
         """Test analyzing suspicious heap (executable)."""
-        analysis = MemoryAnalyzer.analyze_memory_region(
+        analysis = analyzer.analyze_memory_region(
             pathname="[heap]",
             start_addr=0x1000000,
             end_addr=0x2000000,
@@ -285,9 +292,9 @@ class TestAnalyzeMemoryRegion:
         assert analysis["likely_corrupted"] is True
         assert len(analysis["anomalies"]) > 0
 
-    def test_analyze_library_region(self):
+    def test_analyze_library_region(self, analyzer):
         """Test analyzing a library region."""
-        analysis = MemoryAnalyzer.analyze_memory_region(
+        analysis = analyzer.analyze_memory_region(
             pathname="/lib/libc.so.6",
             start_addr=0x7F0000000000,
             end_addr=0x7F0001000000,

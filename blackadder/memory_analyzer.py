@@ -122,6 +122,14 @@ class MemoryAnalyzer:
         if "vvar" in pathname.lower():
             return (MemoryRegionType.VVAR, 0.95)
 
+        # JIT heuristic: executable + writable anonymous memory (before generic ANON)
+        if "[anon]" in pathname and "x" in perms and "w" in perms:
+            return (MemoryRegionType.JIT, 0.75)
+
+        # Heap heuristic: anonymous mapping without execute
+        if "[anon]" in pathname and "x" not in perms and "w" in perms and size > 0x1000:
+            return (MemoryRegionType.HEAP, 0.70)
+
         if "[anon]" in pathname or pathname == "":
             return (MemoryRegionType.ANON, 0.80)
 
@@ -132,14 +140,6 @@ class MemoryAnalyzer:
                 return (MemoryRegionType.MMAP, 0.90)
             else:
                 return (MemoryRegionType.MMAP, 0.85)
-
-        # Heap heuristic: anonymous mapping without execute
-        if "[anon]" in pathname and "x" not in perms and "w" in perms and size > 0x1000:
-            return (MemoryRegionType.HEAP, 0.70)
-
-        # JIT heuristic: executable anonymous memory
-        if "[anon]" in pathname and "x" in perms and "w" in perms:
-            return (MemoryRegionType.JIT, 0.75)
 
         # Default
         return (MemoryRegionType.UNKNOWN, 0.5)
@@ -225,7 +225,7 @@ class MemoryAnalyzer:
             logger.warning(
                 "executable_heap_detected",
                 extra={
-                    "pathname": pathname,
+                    "region_path": pathname,
                 },
             )
             return True
@@ -235,7 +235,7 @@ class MemoryAnalyzer:
             logger.warning(
                 "rwx_region_detected",
                 extra={
-                    "pathname": pathname,
+                    "region_path": pathname,
                 },
             )
             return True
@@ -247,7 +247,7 @@ class MemoryAnalyzer:
                     "writable_system_region_detected",
                     extra={
                         "region_type": region_type.value,
-                        "pathname": pathname,
+                        "region_path": pathname,
                     },
                 )
                 return True

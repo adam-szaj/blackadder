@@ -222,8 +222,33 @@ _baldrick_complete_load() {
             return ;;
     esac
     COMPREPLY=( $(compgen -W \
-        "--rootfs -R --debugfs -D --glob -g --perm -P --files -f --maps -m --pid -p --coredump -C" \
+        "--rootfs -R --debugfs -D --glob -g --perm -P --files -f --maps -m --pid -p --coredump -C --types -t" \
         -- "$cur") )
+}
+
+_baldrick_complete_load_types() {
+    local cur="$1" prev="$2"
+    case "$prev" in
+        --binary|-b) _filedir; return ;;
+    esac
+    COMPREPLY=( $(compgen -W "--binary -b" -- "$cur") )
+}
+
+_baldrick_complete_cast_mem() {
+    local cur="$1" prev="$2"
+    case "$prev" in
+        --binary|-b) _filedir; return ;;
+        --mem)       _filedir; return ;;
+        --type)
+            _baldrick_sql_list "SELECT DISTINCT name FROM dwarftype WHERE tag IN ('structure_type','union_type','typedef') AND name IS NOT NULL ORDER BY name"
+            COMPREPLY=( $(compgen -W "$_BALDRICK_SQL_RESULT" -- "$cur") )
+            return ;;
+        --binary)
+            _baldrick_sql_list "SELECT name FROM binary ORDER BY name"
+            COMPREPLY=( $(compgen -W "$_BALDRICK_SQL_RESULT" -- "$cur") )
+            return ;;
+    esac
+    COMPREPLY=( $(compgen -W "--type --binary -b --mem --addr" -- "$cur") )
 }
 
 _baldrick_complete_load_process() {
@@ -407,7 +432,7 @@ _baldrick_complete() {
 
     # Global options (before subcommand)
     local global_opts="--db -d --debug --log-level --log-file --help"
-    local commands="load load-process decode-backtrace decode-address analyse-memory tag query schema version"
+    local commands="load load-types cast-mem load-process decode-backtrace decode-address analyse-memory analyse-deadlock tag query schema version"
 
     # Handle global options
     case "$prev" in
@@ -421,7 +446,7 @@ _baldrick_complete() {
     local i
     for (( i=1; i<${#COMP_WORDS[@]}; i++ )); do
         case "${COMP_WORDS[$i]}" in
-            load|load-process|decode-backtrace|decode-address|analyse-memory|tag|query|schema|version)
+            load|load-types|cast-mem|load-process|decode-backtrace|decode-address|analyse-memory|analyse-deadlock|tag|query|schema|version)
                 cmd="${COMP_WORDS[$i]}"
                 break
                 ;;
@@ -440,10 +465,13 @@ _baldrick_complete() {
     # Dispatch to per-subcommand function
     case "$cmd" in
         load)               _baldrick_complete_load               "$cur" "$prev" ;;
+        load-types)         _baldrick_complete_load_types         "$cur" "$prev" ;;
+        cast-mem)           _baldrick_complete_cast_mem           "$cur" "$prev" ;;
         load-process)       _baldrick_complete_load_process       "$cur" "$prev" ;;
         decode-backtrace)   _baldrick_complete_decode_backtrace   "$cur" "$prev" ;;
         decode-address)     _baldrick_complete_decode_address     "$cur" "$prev" ;;
         analyse-memory)     _baldrick_complete_analyse_memory     "$cur" "$prev" ;;
+        analyse-deadlock)   COMPREPLY=( $(compgen -W "--snapshot-id -s --lock-state --json" -- "$cur") ) ;;
         tag)                _baldrick_complete_tag                "$cur" "$prev" ;;
         query)              _baldrick_complete_query              "$cur" "$prev" ;;
         schema)             COMPREPLY=() ;;
