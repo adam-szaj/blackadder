@@ -165,12 +165,13 @@ BUILTIN_QUERIES: list[QueryDef] = [
     QueryDef(
         name="types",
         sql=(
-            "SELECT t.name, t.tag, t.byte_size, COUNT(m.id) AS field_count "
-            "FROM dwarftype t "
-            "LEFT JOIN dwarfmember m ON m.type_id = t.id "
-            "JOIN binary b ON b.id = t.binary_id "
-            "WHERE b.name = :binary AND t.tag IN ('structure_type','union_type') "
-            "GROUP BY t.id ORDER BY t.name"
+            "SELECT ct.name, ct.tag, ct.byte_size, COUNT(m.id) AS field_count "
+            "FROM canonical_dwarf_type ct "
+            "LEFT JOIN dwarfmember m ON m.canonical_type_id = ct.id "
+            "JOIN binary_dwarf_ref r ON r.canonical_id = ct.id "
+            "JOIN binary b ON b.id = r.binary_id "
+            "WHERE b.name = :binary AND ct.tag IN ('structure_type','union_type') "
+            "GROUP BY ct.id ORDER BY ct.name"
         ),
         description="Structs and unions defined in a binary (requires load-types)",
         params=["binary"],
@@ -180,35 +181,42 @@ BUILTIN_QUERIES: list[QueryDef] = [
         sql=(
             "SELECT m.byte_offset, m.name, tr.name AS type_name, tr.byte_size, tr.tag "
             "FROM dwarfmember m "
-            "JOIN dwarftype t ON t.id = m.type_id "
-            "LEFT JOIN dwarftype tr ON tr.binary_id = t.binary_id AND tr.die_offset = m.member_type_ref "
+            "JOIN canonical_dwarf_type t ON t.id = m.canonical_type_id "
+            "JOIN binary_dwarf_ref r ON r.canonical_id = t.id "
+            "JOIN binary b ON b.id = r.binary_id AND b.name = :binary "
+            "LEFT JOIN binary_dwarf_ref rr ON rr.binary_id = b.id AND rr.die_offset = m.member_type_ref "
+            "LEFT JOIN canonical_dwarf_type tr ON tr.id = rr.canonical_id "
             "WHERE t.name = :name "
             "ORDER BY m.byte_offset"
         ),
         description="Fields of a named struct/union with byte offsets",
-        params=["name"],
+        params=["name", "binary"],
     ),
     QueryDef(
         name="type-offset",
         sql=(
             "SELECT m.byte_offset, m.name, tr.name AS type_name, tr.byte_size "
             "FROM dwarfmember m "
-            "JOIN dwarftype t ON t.id = m.type_id "
-            "LEFT JOIN dwarftype tr ON tr.binary_id = t.binary_id AND tr.die_offset = m.member_type_ref "
+            "JOIN canonical_dwarf_type t ON t.id = m.canonical_type_id "
+            "JOIN binary_dwarf_ref r ON r.canonical_id = t.id "
+            "JOIN binary b ON b.id = r.binary_id AND b.name = :binary "
+            "LEFT JOIN binary_dwarf_ref rr ON rr.binary_id = b.id AND rr.die_offset = m.member_type_ref "
+            "LEFT JOIN canonical_dwarf_type tr ON tr.id = rr.canonical_id "
             "WHERE t.name = :name AND m.byte_offset <= CAST(:offset AS INTEGER) "
             "ORDER BY m.byte_offset DESC LIMIT 1"
         ),
         description="Which struct field lies at (or just before) a given byte offset",
-        params=["name", "offset"],
+        params=["name", "offset", "binary"],
     ),
     QueryDef(
         name="line2addr",
         sql=(
-            "SELECT d.source_file, d.line_number, d.address "
+            "SELECT sf.path AS source_file, d.line_number, d.address "
             "FROM debugline d "
             "JOIN binary b ON b.id = d.binary_id "
+            "JOIN sourcefile sf ON sf.id = d.source_file_id "
             "WHERE b.name = :binary "
-            "  AND d.source_file LIKE '%' || :file || '%' "
+            "  AND sf.path LIKE '%' || :file || '%' "
             "  AND d.line_number = CAST(:line AS INTEGER) "
             "ORDER BY d.address"
         ),

@@ -167,31 +167,52 @@ class SymbolCache(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("binary_id", "offset", name="uq_symbolcache_binary_offset"),)
 
 
-class DwarfType(SQLModel, table=True):
+class CanonicalDwarfType(SQLModel, table=True):
     """
-    DWARF type definition extracted from a binary via objdump --dwarf=info.
+    Global dictionary of unique DWARF types, deduplicated across all binaries.
+
+    A type is identified by (tag, name, byte_size, encoding) — the four fields
+    that define its semantics independently of which binary it came from.
+    die_offset is binary-local and stored in BinaryDwarfRef, not here.
 
     Covers: structure_type, union_type, base_type, typedef, pointer_type,
     const_type, volatile_type, array_type, enumeration_type.
-
-    die_offset is the DIE offset in .debug_info — unique per binary, used for
-    cross-references between types (type_ref, DwarfMember.member_type_ref).
     """
 
+    __tablename__ = "canonical_dwarf_type"
+
     id: int | None = Field(default=None, primary_key=True)
-    binary_id: int = Field(foreign_key="binary.id")
-    die_offset: int                            # Hex offset in .debug_info (unique per binary)
     tag: str = Field(max_length=32)            # "structure_type", "base_type", "typedef", etc.
     name: str | None = Field(default=None, index=True, max_length=256)
     byte_size: int | None = None               # Total size in bytes (None for const/volatile wrappers)
-    type_ref: int | None = None                # die_offset of referenced DwarfType (typedef→underlying, pointer→target)
-    encoding: str | None = Field(default=None, max_length=32)  # "signed", "unsigned", "float", etc. (base_type only)
+    encoding: str | None = Field(default=None, max_length=32)  # "signed", "unsigned", "float", etc.
 
-    # Composite index covers both binary_id lookups and die_offset resolution.
-    # No UNIQUE — parser deduplicates via seen-set; UNIQUE would cost ~2x INSERT time.
-    __table_args__ = (Index("ix_dwarftype_binary_die", "binary_id", "die_offset"),)
+    __table_args__ = (UniqueConstraint("tag", "name", "byte_size", "encoding"),)
 
-    members: list["DwarfMember"] = Relationship(back_populates="dwarf_type")
+    members: list["DwarfMember"] = Relationship(back_populates="canonical_type")
+
+
+class BinaryDwarfRef(SQLModel, table=True):
+    """
+    Maps binary-local DWARF die_offset to a canonical type entry.
+
+    Each binary has its own die_offset namespace (.debug_info byte offsets).
+    This table bridges binary-local offsets to the global canonical_dwarf_type dict,
+    and preserves type_ref_die for typedef/pointer chain resolution within a binary.
+    """
+
+    __tablename__ = "binary_dwarf_ref"
+
+    id: int | None = Field(default=None, primary_key=True)
+    binary_id: int = Field(foreign_key="binary.id")
+    die_offset: int                    # Local .debug_info offset in this binary
+    canonical_id: int = Field(foreign_key="canonical_dwarf_type.id")
+    type_ref_die: int | None = None    # die_offset of referenced type (typedef→underlying, etc.)
+
+    __table_args__ = (
+        UniqueConstraint("binary_id", "die_offset"),
+        Index("ix_binary_dwarf_ref_binary", "binary_id"),
+    )
 
 
 class DwarfMember(SQLModel, table=True):
@@ -199,16 +220,29 @@ class DwarfMember(SQLModel, table=True):
     Field within a DW_TAG_structure_type or DW_TAG_union_type.
 
     byte_offset is DW_AT_data_member_location — byte offset from struct start.
-    member_type_ref is the die_offset of the DwarfType describing this field's type.
+    member_type_ref is the die_offset of the type describing this field's type
+    (resolved to canonical via BinaryDwarfRef for the same binary).
     """
 
     id: int | None = Field(default=None, primary_key=True)
-    type_id: int = Field(foreign_key="dwarftype.id", index=True)
+    canonical_type_id: int = Field(foreign_key="canonical_dwarf_type.id", index=True)
     name: str | None = Field(default=None, max_length=256)  # None for anonymous embedded structs
     byte_offset: int                   # DW_AT_data_member_location (decimal bytes from struct start)
-    member_type_ref: int               # die_offset of the DwarfType for this member's type
+    member_type_ref: int               # die_offset of the field's type (resolve via BinaryDwarfRef)
 
-    dwarf_type: "DwarfType" = Relationship(back_populates="members")
+    canonical_type: "CanonicalDwarfType" = Relationship(back_populates="members")
+
+
+class SourceFile(SQLModel, table=True):
+    """
+    Normalized source file path catalog.
+
+    Shared across all DebugLine records — each unique path stored once.
+    Reduces debugline table size ~4-5x vs storing full TEXT path per row.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    path: str = Field(unique=True, max_length=512)
 
 
 class DebugLine(SQLModel, table=True):
@@ -218,17 +252,16 @@ class DebugLine(SQLModel, table=True):
     Extracted via readelf --debug-dump=decodedline. Enables line2addr lookups
     (reverse of addr2line) and DB-backed source location resolution.
 
-    source_file stores the full path when available, basename otherwise.
+    source_file_id references SourceFile — path stored once globally.
     address is the binary offset (not virtual address).
     """
 
     id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
-    source_file: str = Field(max_length=512)
+    source_file_id: int = Field(foreign_key="sourcefile.id")
     line_number: int
     address: int = Field(index=True)
     # No UNIQUE — _sync_parse_debug_line deduplicates via seen-set before INSERT.
-    # UNIQUE on (binary_id, source_file, line_number, address) cost ~6x INSERT time.
 
 
 class BinaryLocator(SQLModel, table=True):

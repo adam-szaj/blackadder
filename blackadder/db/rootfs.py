@@ -17,7 +17,7 @@ from sqlalchemy import text as _SA_TEXT
 from sqlmodel import select
 
 from blackadder.binutils.hasher import FunctionHasher
-from blackadder.models import Binary, BinaryLocator, DebugLine, DwarfMember, DwarfType, FunctionFingerprint, SectionHeader, Symbol
+from blackadder.models import Binary, BinaryDwarfRef, BinaryLocator, CanonicalDwarfType, DebugLine, DwarfMember, FunctionFingerprint, SectionHeader, SourceFile, Symbol
 
 from .base import AsyncDatabaseManager
 
@@ -54,6 +54,7 @@ class BinaryPayload:
     dwarf_members: list[tuple]  # (parent_die_offset, name, byte_offset, member_type_ref)
     debug_lines: list[tuple]  # (source_file, line_number, address)
     load_types: bool
+    load_lines: bool
 
 
 # Sentinel for run_payload_writer queue
@@ -277,6 +278,7 @@ class RootfsDatabase:
         rootfs: str = "/",
         debugfs: str | None = None,
         load_types: bool = False,
+        load_lines: bool = False,
     ) -> BinaryPayload:
         """
         Collect all data for a binary without touching the DB.
@@ -334,6 +336,9 @@ class RootfsDatabase:
         dwarf_members: list[tuple] = []
         debug_lines: list[tuple] = []
 
+        # --types implies --lines
+        effective_lines = load_lines or load_types
+
         if load_types:
             try:
                 async with parser.subprocess_sem:
@@ -351,6 +356,7 @@ class RootfsDatabase:
             except Exception as e:
                 logger.debug("dwarf_collect_failed", extra={"binary": binary_path, "error": str(e)})
 
+        if effective_lines:
             try:
                 async with parser.subprocess_sem:
                     dl_raw = await asyncio.to_thread(
@@ -377,6 +383,7 @@ class RootfsDatabase:
             dwarf_members=dwarf_members,
             debug_lines=debug_lines,
             load_types=load_types,
+            load_lines=effective_lines,
         )
 
     @staticmethod
@@ -397,6 +404,9 @@ class RootfsDatabase:
 
         Returns counts: {loaded, skipped, types, members, lines}.
         """
+        # Raw aiosqlite connection — reused for all bulk operations in this payload
+        raw_conn = (await conn.get_raw_connection()).driver_connection
+
         # Idempotency: check if binary exists and already has symbols
         row = await conn.execute(
             _SA_TEXT("SELECT id FROM binary WHERE md5sum=:md5"),
@@ -460,7 +470,7 @@ class RootfsDatabase:
 
             # Sections (bulk)
             if payload.sections:
-                await self._raw_executemany(conn,
+                await raw_conn.executemany(
                     "INSERT OR IGNORE INTO sectionheader"
                     " (binary_id, idx, name, size, vma, lma, off, align)"
                     " VALUES (?,?,?,?,?,?,?,?)",
@@ -479,7 +489,7 @@ class RootfsDatabase:
 
         # Symbols (bulk, shared path for new and reload)
         if payload.symbols:
-            await self._raw_executemany(conn,
+            await raw_conn.executemany(
                 "INSERT OR IGNORE INTO symbol"
                 " (binary_id, address, scope, sym_type, section, size, name)"
                 " VALUES (?,?,?,?,?,?,?)",
@@ -489,51 +499,106 @@ class RootfsDatabase:
         written_types = written_members = written_lines = 0
 
         if payload.load_types and payload.dwarf_types:
-            # Skip if already loaded
-            dt_check = await conn.execute(
-                _SA_TEXT("SELECT 1 FROM dwarftype WHERE binary_id=:bid LIMIT 1"),
+            # Skip if already loaded for this binary
+            ref_check = await conn.execute(
+                _SA_TEXT("SELECT 1 FROM binary_dwarf_ref WHERE binary_id=:bid LIMIT 1"),
                 {"bid": binary_id},
             )
-            if dt_check.first() is None:
-                await self._raw_executemany(conn,
-                    "INSERT OR IGNORE INTO dwarftype"
-                    " (binary_id, die_offset, tag, name, byte_size, type_ref, encoding)"
-                    " VALUES (?,?,?,?,?,?,?)",
-                    [(binary_id, *t) for t in payload.dwarf_types],
+            if ref_check.first() is None:
+                # 1. Upsert canonical types (global dedup by tag+name+byte_size+encoding)
+                # dwarf_types tuple: (die_offset, tag, name, byte_size, type_ref, encoding)
+                canonical_rows = list({
+                    (t[1], t[2], t[3], t[5])  # (tag, name, byte_size, encoding)
+                    for t in payload.dwarf_types
+                })
+                await raw_conn.executemany(
+                    "INSERT OR IGNORE INTO canonical_dwarf_type (tag, name, byte_size, encoding)"
+                    " VALUES (?,?,?,?)",
+                    canonical_rows,
                 )
-                written_types = len(payload.dwarf_types)
 
+                # 2. Fetch canonical_id for each unique (tag, name, byte_size, encoding).
+                # Multi-column IN fails for NULL values in SQLite (NULL != NULL in SQL).
+                # Instead: SELECT by the distinct tags we inserted, then match in Python
+                # using tuple equality (Python None == None).
+                tags_needed = list({r[0] for r in canonical_rows})
+                tag_ph = ",".join("?" * len(tags_needed))
+                cursor = await raw_conn.execute(
+                    f"SELECT id, tag, name, byte_size, encoding"
+                    f" FROM canonical_dwarf_type WHERE tag IN ({tag_ph})",
+                    tags_needed,
+                )
+                canon_map: dict[tuple, int] = {
+                    (row[1], row[2], row[3], row[4]): row[0]
+                    for row in await cursor.fetchall()
+                }
+
+                # 3. INSERT binary_dwarf_ref — die_offset → canonical_id + type_ref_die
+                ref_rows = [
+                    (binary_id, t[0], canon_map[(t[1], t[2], t[3], t[5])], t[4])
+                    for t in payload.dwarf_types
+                    if (t[1], t[2], t[3], t[5]) in canon_map
+                ]
+                await raw_conn.executemany(
+                    "INSERT OR IGNORE INTO binary_dwarf_ref"
+                    " (binary_id, die_offset, canonical_id, type_ref_die)"
+                    " VALUES (?,?,?,?)",
+                    ref_rows,
+                )
+                written_types = len(ref_rows)
+
+                # 4. INSERT dwarfmember — canonical_type_id via in-memory die_offset→canonical_id map
                 if payload.dwarf_members:
-                    raw = await conn.get_raw_connection()
-                    rc = raw.driver_connection
-                    cursor = await rc.execute("SELECT id, die_offset FROM dwarftype WHERE binary_id=?", (binary_id,))
-                    die_to_id = {row[1]: row[0] for row in await cursor.fetchall()}
+                    die_to_canonical: dict[int, int] = {
+                        t[0]: canon_map[(t[1], t[2], t[3], t[5])]
+                        for t in payload.dwarf_types
+                        if (t[1], t[2], t[3], t[5]) in canon_map
+                    }
                     # dwarf_members tuple: (parent_die_offset, name, byte_offset, member_type_ref)
                     member_rows = [
-                        (die_to_id[m[0]], m[1], m[2], m[3])
+                        (die_to_canonical[m[0]], m[1], m[2], m[3])
                         for m in payload.dwarf_members
-                        if m[0] in die_to_id
+                        if m[0] in die_to_canonical
                     ]
                     if member_rows:
-                        await self._raw_executemany(conn,
+                        await raw_conn.executemany(
                             "INSERT INTO dwarfmember"
-                            " (type_id, name, byte_offset, member_type_ref)"
+                            " (canonical_type_id, name, byte_offset, member_type_ref)"
                             " VALUES (?,?,?,?)",
                             member_rows,
                         )
                         written_members = len(member_rows)
 
-        if payload.load_types and payload.debug_lines:
+        if payload.load_lines and payload.debug_lines:
             dl_check = await conn.execute(
                 _SA_TEXT("SELECT 1 FROM debugline WHERE binary_id=:bid LIMIT 1"),
                 {"bid": binary_id},
             )
             if dl_check.first() is None:
-                await self._raw_executemany(conn,
+                # Normalize source_file paths → sourcefile catalog
+                # debug_lines tuples: (source_file, line_number, address)
+                unique_paths = list({dl[0] for dl in payload.debug_lines})
+
+                # Insert new paths (ignore existing)
+                await raw_conn.executemany(
+                    "INSERT OR IGNORE INTO sourcefile (path) VALUES (?)",
+                    [(p,) for p in unique_paths],
+                )
+
+                # Fetch all needed path→id mappings in one query
+                placeholders = ",".join("?" * len(unique_paths))
+                cursor = await raw_conn.execute(
+                    f"SELECT id, path FROM sourcefile WHERE path IN ({placeholders})",
+                    unique_paths,
+                )
+                path_to_id = {row[1]: row[0] for row in await cursor.fetchall()}
+
+                await raw_conn.executemany(
                     "INSERT OR IGNORE INTO debugline"
-                    " (binary_id, source_file, line_number, address)"
+                    " (binary_id, source_file_id, line_number, address)"
                     " VALUES (?,?,?,?)",
-                    [(binary_id, *dl) for dl in payload.debug_lines],
+                    [(binary_id, path_to_id[dl[0]], dl[1], dl[2])
+                     for dl in payload.debug_lines],
                 )
                 written_lines = len(payload.debug_lines)
 

@@ -334,13 +334,22 @@ async def load(
         ),
     ),
     load_types: bool = typer.Option(
-        False, "--types", "-t", help="Also load DWARF type info and .debug_line mappings"
+        False, "--types", "-t", help="Also load DWARF type info (implies --lines)"
+    ),
+    load_lines: bool = typer.Option(
+        False, "--lines", "-l", help="Also load .debug_line addr→source mappings"
     ),
     max_bin: int | None = typer.Option(
         None, "--maxbin", help="Stop after loading N binaries (useful for testing)"
     ),
     max_depth: int | None = typer.Option(
         None, "--maxdepth", help="Max directory depth to recurse into (0 = only top-level dir)"
+    ),
+    slow_threshold: float = typer.Option(
+        5.0, "--slow-threshold", help="Show a spinner for binaries taking longer than this many seconds"
+    ),
+    slow_top: int = typer.Option(
+        5, "--slow-top", help="Max number of slow-binary spinners shown simultaneously"
     ),
 ) -> None:
     """
@@ -453,7 +462,7 @@ async def load(
                 f" types={_live['types']} lines={_live['lines']}"
                 + writer_info
                 + (f" [red]retries={_live['retries']}[/red]" if _live["retries"] else "")
-            ) if load_types else writer_info
+            ) if (load_types or load_lines) else writer_info
             progress.update(
                 task_id,
                 description=(
@@ -462,15 +471,60 @@ async def load(
                 ),
             )
 
+        # Slow-task subtask tracker: show up to `slow_top` spinners for binaries
+        # that have been running longer than `slow_threshold` seconds.
+        # slow_threshold / slow_top come from CLI options
+
+        # Map: path → (start_time, progress_task_id | None)
+        _slow_running: dict[str, tuple[float, int | None]] = {}
+
+        def _slow_register(path: str) -> None:
+            _slow_running[path] = (time.monotonic(), None)
+
+        def _slow_unregister(path: str) -> None:
+            entry = _slow_running.pop(path, None)
+            if entry and entry[1] is not None:
+                progress.remove_task(entry[1])
+
+        def _slow_tick() -> None:
+            """Called periodically; promote slow tasks to visible spinner rows."""
+            now = time.monotonic()
+            # Collect tasks past threshold that don't yet have a subtask row,
+            # sorted oldest-first so we promote the slowest ones.
+            pending = sorted(
+                ((p, t0) for p, (t0, tid) in _slow_running.items() if tid is None and now - t0 >= slow_threshold),
+                key=lambda x: x[1],
+            )
+            # Count how many slots are already occupied
+            occupied = sum(1 for t0, tid in _slow_running.values() if tid is not None)
+            for path, t0 in pending:
+                if occupied >= slow_top:
+                    break
+                elapsed = now - t0
+                tid = progress.add_task(
+                    f"  [dim]{Path(path).name} ({elapsed:.0f}s…)[/dim]",
+                    total=None,
+                )
+                _slow_running[path] = (t0, tid)
+                occupied += 1
+            # Update description of already-visible slow tasks; include slot info
+            total_slow = sum(1 for t0, tid in _slow_running.values() if now - t0 >= slow_threshold)
+            visible_slow = sum(1 for t0, tid in _slow_running.values() if tid is not None)
+            for path, (t0, tid) in _slow_running.items():
+                if tid is not None:
+                    elapsed = now - t0
+                    progress.update(tid, description=f"  [dim]{Path(path).name} ({elapsed:.0f}s…) [{visible_slow}/{total_slow} slow][/dim]")
+
         async def _load_one(path: str) -> None:
             nonlocal failed, active, t_io, tasks_done
             active += 1
+            _slow_register(path)
             _update_description()
             try:
                 _t1 = time.monotonic()
                 payload = await rootfs_db_obj.collect_binary_payload(
                     path, rootfs=rootfs, debugfs=debugfs or rootfs,
-                    load_types=load_types,
+                    load_types=load_types, load_lines=load_lines,
                 )
                 t_io += time.monotonic() - _t1
                 tasks_done += 1
@@ -481,6 +535,7 @@ async def load(
                 progress.console.print(f"  [yellow]Skip {Path(path).name}: {e}[/yellow]")
             finally:
                 active -= 1
+                _slow_unregister(path)
                 _update_description()
                 progress.advance(task_id)
 
@@ -508,6 +563,7 @@ async def load(
         async def _refresh_loop() -> None:
             while True:
                 await asyncio.sleep(1.0)
+                _slow_tick()
                 _update_description()
 
         with progress:
@@ -537,7 +593,7 @@ async def load(
         w_commit = writer_stats.get("t_commit_ms", 0)
         commits  = writer_stats.get("commits", 0)
         avg_commit_ms = f"{w_commit // commits}ms/commit" if commits else "—"
-        timing_table.add_row("collect I/O",       f"{t_io:.2f}",        f"{t_io/n*1000:.0f}", "md5 + readelf + objdump" + (" + DWARF" if load_types else ""))
+        timing_table.add_row("collect I/O",       f"{t_io:.2f}",        f"{t_io/n*1000:.0f}", "md5 + readelf + objdump" + (" + DWARF" if load_types else "") + (" + debugline" if (load_lines and not load_types) else ""))
         timing_table.add_row("db INSERT (SQL)",   f"{w_apply/1000:.2f}",  "—",
                              f"{writer_stats.get('loaded',0)} loaded, {writer_stats.get('skipped',0)} skipped, "
                              f"{writer_stats.get('types',0)} types, {writer_stats.get('lines',0)} lines")
@@ -610,8 +666,9 @@ async def cast_mem(
     """
     import struct as _struct
 
+    from blackadder.models import BinaryDwarfRef as BinaryDwarfRefModel
+    from blackadder.models import CanonicalDwarfType as CanonicalDwarfTypeModel
     from blackadder.models import DwarfMember as DwarfMemberModel
-    from blackadder.models import DwarfType as DwarfTypeModel
     from sqlmodel import select as sql_select
 
     # --- Parse memory bytes ---
@@ -645,30 +702,50 @@ async def cast_mem(
     try:
         await manager.create_all()
 
-        async def get_type_by_name(name: str, bin_id: int) -> "DwarfTypeModel | None":
+        async def get_type_by_name(name: str, bin_id: int) -> "CanonicalDwarfTypeModel | None":
+            """Find canonical type by name (via binary_dwarf_ref for bin_id scoping)."""
             async with manager.get_session() as s:
                 result = await s.execute(
-                    sql_select(DwarfTypeModel).where(
-                        (DwarfTypeModel.binary_id == bin_id)
-                        & (DwarfTypeModel.name == name)
+                    sql_select(CanonicalDwarfTypeModel)
+                    .join(BinaryDwarfRefModel, BinaryDwarfRefModel.canonical_id == CanonicalDwarfTypeModel.id)
+                    .where(
+                        (BinaryDwarfRefModel.binary_id == bin_id)
+                        & (CanonicalDwarfTypeModel.name == name)
                     )
+                    .limit(1)
                 )
                 return result.scalars().first()
 
-        async def get_type_by_offset(die_offset: int, bin_id: int) -> "DwarfTypeModel | None":
+        async def get_type_by_die(die_offset: int, bin_id: int) -> "CanonicalDwarfTypeModel | None":
+            """Resolve die_offset → canonical type via binary_dwarf_ref."""
             async with manager.get_session() as s:
                 result = await s.execute(
-                    sql_select(DwarfTypeModel).where(
-                        (DwarfTypeModel.binary_id == bin_id)
-                        & (DwarfTypeModel.die_offset == die_offset)
+                    sql_select(CanonicalDwarfTypeModel)
+                    .join(BinaryDwarfRefModel, BinaryDwarfRefModel.canonical_id == CanonicalDwarfTypeModel.id)
+                    .where(
+                        (BinaryDwarfRefModel.binary_id == bin_id)
+                        & (BinaryDwarfRefModel.die_offset == die_offset)
                     )
+                    .limit(1)
                 )
                 return result.scalars().first()
 
-        async def get_members(type_id: int) -> "list[DwarfMemberModel]":
+        async def get_type_ref_die(die_offset: int, bin_id: int) -> int | None:
+            """Get type_ref_die from binary_dwarf_ref for typedef chain traversal."""
             async with manager.get_session() as s:
                 result = await s.execute(
-                    sql_select(DwarfMemberModel).where(DwarfMemberModel.type_id == type_id)
+                    sql_select(BinaryDwarfRefModel).where(
+                        (BinaryDwarfRefModel.binary_id == bin_id)
+                        & (BinaryDwarfRefModel.die_offset == die_offset)
+                    ).limit(1)
+                )
+                ref = result.scalars().first()
+                return ref.type_ref_die if ref else None
+
+        async def get_members(canonical_type_id: int) -> "list[DwarfMemberModel]":
+            async with manager.get_session() as s:
+                result = await s.execute(
+                    sql_select(DwarfMemberModel).where(DwarfMemberModel.canonical_type_id == canonical_type_id)
                 )
                 return list(result.scalars().all())
 
@@ -691,12 +768,30 @@ async def cast_mem(
             console.print(f"[red]Type not found: {type_name!r} in {binary}[/red]")
             raise typer.Exit(1)
 
+        # Build die_offset→canonical lookup for this binary for typedef traversal.
+        # We need the die_offset of `root` to follow type_ref_die chains.
+        # Find the die_offset for `root` via binary_dwarf_ref.
+        async def find_die_for_canonical(canonical_id: int, bin_id: int) -> int | None:
+            async with manager.get_session() as s:
+                result = await s.execute(
+                    sql_select(BinaryDwarfRefModel).where(
+                        (BinaryDwarfRefModel.binary_id == bin_id)
+                        & (BinaryDwarfRefModel.canonical_id == canonical_id)
+                    ).limit(1)
+                )
+                ref = result.scalars().first()
+                return ref.die_offset if ref else None
+
         visited: set[int] = set()
         while root.tag in ("typedef", "const_type", "volatile_type", "restrict_type"):
-            if root.type_ref is None or root.id in visited:
+            root_die = await find_die_for_canonical(root.id, bin_id)  # type: ignore[arg-type]
+            if root_die is None or root_die in visited:
                 break
-            visited.add(root.id)  # type: ignore[arg-type]
-            next_type = await get_type_by_offset(root.type_ref, bin_id)
+            visited.add(root_die)
+            type_ref_die = await get_type_ref_die(root_die, bin_id)
+            if type_ref_die is None:
+                break
+            next_type = await get_type_by_die(type_ref_die, bin_id)
             if next_type is None:
                 break
             root = next_type
@@ -708,7 +803,7 @@ async def cast_mem(
         FlatField = tuple[int, str, str, int | None, str | None]  # (offset, path, type_name, byte_size, encoding)
 
         async def flatten(
-            t: "DwarfTypeModel",
+            t: "CanonicalDwarfTypeModel",
             prefix: str = "",
             base: int = 0,
             depth: int = 0,
@@ -720,10 +815,7 @@ async def cast_mem(
             for m in sorted(members, key=lambda x: x.byte_offset):
                 field_path = f"{prefix}.{m.name}" if m.name else f"{prefix}.<anon>"
                 abs_offset = base + m.byte_offset
-                if m.member_type_ref is None:
-                    rows.append((abs_offset, field_path, "?", None, None))
-                    continue
-                mtype = await get_type_by_offset(m.member_type_ref, bin_id)
+                mtype = await get_type_by_die(m.member_type_ref, bin_id)
                 if mtype is None:
                     rows.append((abs_offset, field_path, "?", None, None))
                     continue
@@ -731,10 +823,14 @@ async def cast_mem(
                 inner = mtype
                 iv: set[int] = set()
                 while inner.tag in ("typedef", "const_type", "volatile_type", "restrict_type"):
-                    if inner.type_ref is None or inner.id in iv:
+                    inner_die = await find_die_for_canonical(inner.id, bin_id)  # type: ignore[arg-type]
+                    if inner_die is None or inner_die in iv:
                         break
-                    iv.add(inner.id)  # type: ignore[arg-type]
-                    nxt = await get_type_by_offset(inner.type_ref, bin_id)
+                    iv.add(inner_die)
+                    tref_die = await get_type_ref_die(inner_die, bin_id)
+                    if tref_die is None:
+                        break
+                    nxt = await get_type_by_die(tref_die, bin_id)
                     if nxt is None:
                         break
                     inner = nxt
