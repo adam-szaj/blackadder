@@ -171,6 +171,62 @@ class TestNullDeref:
         report = _engine(register_states=[rs]).analyze()
         assert any(p.name == "null-deref" for p in report.patterns)
 
+    def test_h2_crash_insn_att_syntax(self):
+        # AT&T syntax: movl $0x2a,(%rdi) — rdi used as memory base
+        # Exact backtrace_test scenario: rdi=0x0 at movl $0x2a,(%rdi)
+        rs = _regstate(None, {
+            "rip": 0x55555555512d, "rdi": 0x0,
+            "__crash_insn__": "movl   $0x2a,(%rdi)",
+        })
+        report = _engine(register_states=[rs]).analyze()
+        p = next((x for x in report.patterns if x.name == "null-deref"), None)
+        assert p is not None
+        assert "rdi" in p.evidence[0]
+        assert p.confidence == "probable"
+
+    def test_h2_crash_insn_intel_syntax(self):
+        # Intel syntax: mov DWORD PTR [rdi],0x2a
+        rs = _regstate(None, {
+            "rip": 0x400000, "rdi": 0x0,
+            "__crash_insn__": "mov    DWORD PTR [rdi],0x2a",
+        })
+        report = _engine(register_states=[rs]).analyze()
+        p = next((x for x in report.patterns if x.name == "null-deref"), None)
+        assert p is not None
+        assert "rdi" in p.evidence[0]
+
+    def test_h2_no_false_positive_nonzero_reg(self):
+        # rdi in crash instruction but not NULL — no null-deref
+        rs = _regstate(None, {
+            "rip": 0x400000, "rdi": 0x7f1234567890,
+            "__crash_insn__": "movl   $0x2a,(%rdi)",
+        })
+        report = _engine(register_states=[rs]).analyze()
+        assert not any(p.name == "null-deref" for p in report.patterns)
+
+    def test_h3_fallback_zero_reg(self):
+        # No crash instruction — h3 fallback: rdi=0 while rip is valid
+        rs = _regstate(None, {"rip": 0x55555555512d, "rdi": 0x0})
+        report = _engine(register_states=[rs]).analyze()
+        p = next((x for x in report.patterns if x.name == "null-deref"), None)
+        assert p is not None
+        assert p.confidence == "possible"
+
+    def test_h3_no_false_positive_normal_regs(self):
+        # All regs have normal values — no null-deref
+        rs = _regstate(None, {"rip": 0x55555555512d, "rdi": 0x7f1234567890})
+        report = _engine(register_states=[rs]).analyze()
+        assert not any(p.name == "null-deref" for p in report.patterns)
+
+    def test_h1_takes_precedence_when_ip_null(self):
+        # IP is NULL — h1 fires, h2/h3 skipped for same thread
+        rs = _regstate(None, {"rip": 0x0, "rdi": 0x0,
+                               "__crash_insn__": "movl $0x2a,(%rdi)"})
+        report = _engine(register_states=[rs]).analyze()
+        patterns = [p for p in report.patterns if p.name == "null-deref"]
+        assert len(patterns) == 1
+        assert "IP/PC" in patterns[0].evidence[0]
+
 
 # ============================================================================
 # Tests — use-after-free

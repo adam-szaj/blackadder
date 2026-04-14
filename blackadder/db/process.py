@@ -309,7 +309,7 @@ class ProcessDatabase:
                 & (MemoryMapping.end_addr > addr)
             )
             result = await session.execute(statement)  # type: ignore
-            mapping = result.first()
+            mapping = result.scalars().first()
 
             if not mapping:
                 logger.debug(
@@ -629,13 +629,18 @@ class ProcessDatabase:
                     )
                     session.add(entry)
 
-                # Register state — stored as architecture-agnostic JSON
-                if gdb_thread.registers:
+                # Register state — stored as architecture-agnostic JSON.
+                # crash_instruction (if captured via x/1i $pc) stored under
+                # the special key "__crash_insn__" in the same JSON blob.
+                if gdb_thread.registers or gdb_thread.crash_instruction:
                     import json
+                    reg_data: dict = dict(gdb_thread.registers)
+                    if gdb_thread.crash_instruction:
+                        reg_data["__crash_insn__"] = gdb_thread.crash_instruction  # type: ignore[assignment]
                     reg_state = ProcessRegisterState(
                         process_id=process_id,
                         thread_id=thread.id,
-                        registers_json=json.dumps(gdb_thread.registers),
+                        registers_json=json.dumps(reg_data),
                     )
                     session.add(reg_state)
 

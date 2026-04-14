@@ -46,6 +46,7 @@ class GdbThread:
     name: str | None           # Thread name in quotes, if present
     frames: list[GdbFrame] = field(default_factory=list)
     registers: dict[str, int] = field(default_factory=dict)  # reg name → value
+    crash_instruction: str | None = None  # raw asm text from "x/1i $pc", e.g. "movl $0x2a,(%rdi)"
 
 
 @dataclass
@@ -84,6 +85,13 @@ _RE_REGISTER = re.compile(
     r'^(\w+)\s+(0x[0-9a-fA-F]+|\d+)\s',
 )
 
+# "=> 0x55555555512d <f0(int*)+4>:  movl   $0x2a,(%rdi)"
+# "   0x55555555512d <f0+4>:        mov    eax,DWORD PTR [rdi]"
+# Captures everything after the colon as the raw instruction text.
+_RE_CRASH_INSN = re.compile(
+    r'^(?:=>)?\s*0x[0-9a-fA-F]+(?:\s+<[^>]*>)?:\s+(?:[0-9a-fA-F]{2}\s+)*(.+)$'
+)
+
 # Registers to skip — GDB pseudo-regs and display-only fields that are not
 # actual CPU registers (no fixed set per-arch: we accept everything else).
 _SKIP_REGS = {
@@ -118,6 +126,7 @@ def parse_gdb_dump(text: str) -> GdbDump:
     dump = GdbDump()
     current_thread: GdbThread | None = None
     in_registers = False
+    expect_crash_insn = False  # True: next non-empty line is x/1i output
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -134,6 +143,21 @@ def parse_gdb_dump(text: str) -> GdbDump:
             current_thread = GdbThread(gdb_thread_num=gdb_num, tid=tid, name=name)
             dump.threads.append(current_thread)
             in_registers = False
+            continue
+
+        # ── Crash instruction (from "x/1i $pc") ───────────────────────────
+        # Marker "BALDRICK_CRASH_INSN" emitted by _collect_gdb_dump signals
+        # that the next non-empty line is x/1i $pc output.
+        if line == "BALDRICK_CRASH_INSN":
+            in_registers = False
+            expect_crash_insn = True
+            continue
+
+        if expect_crash_insn:
+            expect_crash_insn = False
+            m = _RE_CRASH_INSN.match(line)
+            if m and current_thread is not None:
+                current_thread.crash_instruction = m.group(1).strip()
             continue
 
         # ── Register section marker ────────────────────────────────────────

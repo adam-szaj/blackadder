@@ -63,6 +63,16 @@ _ALLOC_SYMBOLS: frozenset[str] = frozenset({
 _IP_REGS: tuple[str, ...] = ("rip", "pc", "eip", "ip")
 # Stack pointer register names per arch
 _SP_REGS: tuple[str, ...] = ("rsp", "sp", "esp")
+# Regex to extract register names used as memory base in asm operands.
+# Matches: (%rdi)  [rdi]  [x0]  (r0)  [rdi+0x8]  0x10(%rbp)  etc.
+# Captures the register name (without %, brackets, or offsets).
+import re as _re
+_RE_MEM_REG = _re.compile(
+    r'(?:'
+    r'\((%\w+)\)'               # AT&T: (%rdi) or offset(%rbp)
+    r'|\[(\w+)(?:[,+][^\]]*)?]' # Intel: [rdi] or [rdi+8] or [x0, #8]
+    r')',
+)
 
 
 # ============================================================================
@@ -216,29 +226,92 @@ class CrashPatternEngine:
         )
 
     def _detect_null_deref(self) -> CrashPattern | None:
-        """IP/PC == 0 or crash address < 0x1000 → null dereference."""
+        """Detect null pointer dereference.
+
+        Three heuristics, applied in order (first match wins per thread):
+
+        1. IP/PC < 0x1000 — jumped to NULL (null function pointer / vtable corruption).
+
+        2. Crash instruction available (from x/1i $pc captured during baldrick-load):
+           parse memory operands — if a register used as a memory base address has
+           value < 0x1000, that is the null pointer being dereferenced.
+           Example: "movl $0x2a,(%rdi)" with rdi=0x0 → certain null-deref via rdi.
+
+        3. Fallback (no crash instruction): any general-purpose register has value
+           exactly 0 while IP is valid.  Low confidence — many false positives,
+           but better than nothing when x/1i was unavailable.
+        """
         evidence: list[str] = []
 
         for tid_key, regs in self._regs_by_thread.items():
+            label = f"TID {tid_key}" if tid_key is not None else "main thread"
+
             ip: int | None = None
             for reg in _IP_REGS:
                 if reg in regs:
                     ip = regs[reg]
                     break
+
+            # Heuristic 1: IP itself is near NULL
             if ip is not None and ip < 0x1000:
-                label = f"TID {tid_key}" if tid_key is not None else "main thread"
-                evidence.append(f"{label}: IP/PC=0x{ip:x} (near NULL)")
+                evidence.append(
+                    f"{label}: IP/PC=0x{ip:x} (near NULL — "
+                    f"NULL function pointer or vtable corruption)"
+                )
+                continue
+
+            crash_insn: str | None = regs.get("__crash_insn__")  # type: ignore[assignment]
+
+            # Heuristic 2: parse crash instruction memory operands
+            if crash_insn and ip is not None and ip >= 0x1000:
+                for m in _RE_MEM_REG.finditer(crash_insn):
+                    raw_reg = m.group(1) or m.group(2)  # "%rdi" or "rdi"
+                    reg_name = raw_reg.lstrip("%").lower()
+                    val = regs.get(reg_name)
+                    if val is not None and val < 0x1000:
+                        evidence.append(
+                            f"{label}: null-deref via {reg_name}=0x{val:x} "
+                            f"in '{crash_insn}' at IP=0x{ip:x}"
+                        )
+                        break
+                if evidence and evidence[-1].startswith(label):
+                    continue  # found via h2, skip h3
+
+            # Heuristic 3: fallback — no crash instruction, look for exact-zero regs
+            # Only registers that look like general-purpose (exclude SP/IP/flags)
+            if not crash_insn and ip is not None and ip >= 0x1000:
+                _skip = set(_IP_REGS) | set(_SP_REGS) | {
+                    "eflags", "flags", "cpsr", "cs", "ss", "ds", "es", "fs", "gs",
+                    "__crash_insn__",
+                }
+                zero_regs = [
+                    r for r, v in regs.items()
+                    if v == 0 and r not in _skip and not r.startswith("__")
+                ]
+                if zero_regs:
+                    evidence.append(
+                        f"{label}: register(s) {', '.join(zero_regs[:3])} = 0 "
+                        f"at IP=0x{ip:x} (possible null-deref — no crash instruction available)"
+                    )
 
         if not evidence:
             return None
 
+        # Confidence depends on which heuristic fired:
+        # h1/h2 → probable (we know what crashed); h3 → possible (guessing)
+        has_certain = any(
+            "null-deref via" in e or "near NULL" in e
+            for e in evidence
+        )
+        confidence = "probable" if has_certain else "possible"
+
         return CrashPattern(
             name="null-deref",
-            confidence="probable",
-            description="Instruction pointer near NULL — likely null pointer dereference",
+            confidence=confidence,
+            description="NULL or near-NULL pointer dereference detected",
             evidence=evidence,
-            suggestion="Check pointers before dereference. "
-                       "Look for uninitialized function pointers or vtable corruption.",
+            suggestion="Check all pointer arguments for NULL before dereference. "
+                       "Look for missing NULL checks on return values (malloc, open, etc.).",
         )
 
     def _detect_use_after_free(self) -> CrashPattern | None:

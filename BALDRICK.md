@@ -293,4 +293,95 @@ Usage:
     baldrick --db session.db qt id=1
     baldrick --db session.db qdl id=1
 
+
+## GDB Plugin
+
+`tests/gdb-scripts/_gdb/blackadder_gdb.py` — Python plugin for GDB. Imports blackadder directly (no subprocess for queries). Reads live memory via GDB inferior API. Requires a process snapshot in DB (`baldrick-load` or `baldrick load-process` first).
+
+### Setup
+
+```
+(gdb) source /path/to/tests/gdb-scripts/_gdb/blackadder_gdb.py
+(gdb) set baldrick-db /path/to/session.db
+(gdb) set baldrick-snapshot 1      # optional, default: latest
+```
+
+Or via env var: `export BALDRICK_DB=/path/to/session.db`
+
+### Commands
+
+**`baldrick-explain <addr>`**
+
+Describe address: memory region + perms, binary, nearest symbol + offset + section, DWARF type name + size, struct fields with live values.
+
+    (gdb) baldrick-explain $rdi
+    (gdb) baldrick-explain 0x7f1234567890
+    (gdb) baldrick-explain $rsp+8
+
+**`baldrick-cast <addr> <type> [binary]`**
+
+Read memory at addr and cast to named C struct. Binary auto-detected from mappings if omitted.
+
+    (gdb) baldrick-cast $rdi pthread_mutex_t
+    (gdb) baldrick-cast 0x7f1234 __pthread_mutex_s libpthread.so.0
+
+Requires types loaded: `baldrick --db s.db load-types --binary libpthread.so.0`
+
+**`baldrick-load`**
+
+Load current process state into DB (mappings, threads). Calls `baldrick load-process --pid <pid>` via subprocess.
+
+    (gdb) baldrick-load
+
+**`baldrick-report`**
+
+Run full debug report: threads, memory anomalies, deadlock analysis, crash patterns.
+
+    (gdb) baldrick-report
+
+**`baldrick-info registers`**
+
+Like `info registers` but annotates pointer-like values with region/symbol from DB.
+
+    (gdb) baldrick-info registers
+    rax  0x00007f1234567890  →  [heap]  pthread_mutex_t  __pthread_mutex_s
+    rsp  0x00007fff12340000  →  [stack]
+    rip  0x00007f1234001234  →  libc.so.6  malloc+0x24  (.text)
+
+**`baldrick-info frame`**
+
+Like `info frame` + pointer analysis of arguments and local variables.
+
+    (gdb) baldrick-info frame
+
+**`baldrick-disasm [addr] [count]`**
+
+Disassemble with address/operand annotations. Annotates immediate addresses and RIP-relative operands.
+
+    (gdb) baldrick-disasm
+    (gdb) baldrick-disasm $pc 20
+    (gdb) baldrick-disasm 0x7f1234001234 8
+
+### Typical workflow
+
+```
+# 1. In terminal — load snapshot
+baldrick --db /tmp/debug.db load-process --pid 12345
+baldrick --db /tmp/debug.db load-types --binary libpthread.so.0
+
+# 2. In GDB
+gdb -q ./myapp 12345
+(gdb) source tests/gdb-scripts/_gdb/blackadder_gdb.py
+(gdb) set baldrick-db /tmp/debug.db
+(gdb) baldrick-info registers
+(gdb) baldrick-explain $rdi
+(gdb) baldrick-cast $rdi pthread_mutex_t
+(gdb) baldrick-disasm $pc 15
+(gdb) baldrick-report
+```
+
+Note: GDB live attach requires `ptrace_scope=0`:
+
+    echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+
 Aliases expanded before flag parsing — extra args appended verbatim (like git). One expansion level only; no alias chaining.

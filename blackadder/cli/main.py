@@ -664,12 +664,7 @@ async def cast_mem(
         baldrick --db session.db cast-mem --type pthread_mutex_t --binary libc.so.6 \\
             --mem @/tmp/memdump.bin --addr 0x1000
     """
-    import struct as _struct
-
-    from blackadder.models import BinaryDwarfRef as BinaryDwarfRefModel
-    from blackadder.models import CanonicalDwarfType as CanonicalDwarfTypeModel
-    from blackadder.models import DwarfMember as DwarfMemberModel
-    from sqlmodel import select as sql_select
+    from blackadder.dwarf_query import get_binary_id, resolve_and_flatten
 
     # --- Parse memory bytes ---
     try:
@@ -702,146 +697,19 @@ async def cast_mem(
     try:
         await manager.create_all()
 
-        async def get_type_by_name(name: str, bin_id: int) -> "CanonicalDwarfTypeModel | None":
-            """Find canonical type by name (via binary_dwarf_ref for bin_id scoping)."""
-            async with manager.get_session() as s:
-                result = await s.execute(
-                    sql_select(CanonicalDwarfTypeModel)
-                    .join(BinaryDwarfRefModel, BinaryDwarfRefModel.canonical_id == CanonicalDwarfTypeModel.id)
-                    .where(
-                        (BinaryDwarfRefModel.binary_id == bin_id)
-                        & (CanonicalDwarfTypeModel.name == name)
-                    )
-                    .limit(1)
-                )
-                return result.scalars().first()
-
-        async def get_type_by_die(die_offset: int, bin_id: int) -> "CanonicalDwarfTypeModel | None":
-            """Resolve die_offset → canonical type via binary_dwarf_ref."""
-            async with manager.get_session() as s:
-                result = await s.execute(
-                    sql_select(CanonicalDwarfTypeModel)
-                    .join(BinaryDwarfRefModel, BinaryDwarfRefModel.canonical_id == CanonicalDwarfTypeModel.id)
-                    .where(
-                        (BinaryDwarfRefModel.binary_id == bin_id)
-                        & (BinaryDwarfRefModel.die_offset == die_offset)
-                    )
-                    .limit(1)
-                )
-                return result.scalars().first()
-
-        async def get_type_ref_die(die_offset: int, bin_id: int) -> int | None:
-            """Get type_ref_die from binary_dwarf_ref for typedef chain traversal."""
-            async with manager.get_session() as s:
-                result = await s.execute(
-                    sql_select(BinaryDwarfRefModel).where(
-                        (BinaryDwarfRefModel.binary_id == bin_id)
-                        & (BinaryDwarfRefModel.die_offset == die_offset)
-                    ).limit(1)
-                )
-                ref = result.scalars().first()
-                return ref.type_ref_die if ref else None
-
-        async def get_members(canonical_type_id: int) -> "list[DwarfMemberModel]":
-            async with manager.get_session() as s:
-                result = await s.execute(
-                    sql_select(DwarfMemberModel).where(DwarfMemberModel.canonical_type_id == canonical_type_id)
-                )
-                return list(result.scalars().all())
-
-        # --- Find binary_id ---
-        from blackadder.models import Binary as BinaryModel
-        async with manager.get_session() as s:
-            result = await s.execute(
-                sql_select(BinaryModel).where(BinaryModel.name == binary)
-            )
-            bin_obj = result.scalars().first()
-
-        if bin_obj is None:
+        bin_id = await get_binary_id(manager, binary)
+        if bin_id is None:
             console.print(f"[red]Binary not found: {binary!r}[/red]")
             raise typer.Exit(1)
-        bin_id = bin_obj.id
 
-        # --- Resolve typedef chain to root struct/union ---
-        root = await get_type_by_name(type_name, bin_id)
-        if root is None:
+        result = await resolve_and_flatten(manager, type_name, bin_id)
+        if result is None:
             console.print(f"[red]Type not found: {type_name!r} in {binary}[/red]")
             raise typer.Exit(1)
 
-        # Build die_offset→canonical lookup for this binary for typedef traversal.
-        # We need the die_offset of `root` to follow type_ref_die chains.
-        # Find the die_offset for `root` via binary_dwarf_ref.
-        async def find_die_for_canonical(canonical_id: int, bin_id: int) -> int | None:
-            async with manager.get_session() as s:
-                result = await s.execute(
-                    sql_select(BinaryDwarfRefModel).where(
-                        (BinaryDwarfRefModel.binary_id == bin_id)
-                        & (BinaryDwarfRefModel.canonical_id == canonical_id)
-                    ).limit(1)
-                )
-                ref = result.scalars().first()
-                return ref.die_offset if ref else None
-
-        visited: set[int] = set()
-        while root.tag in ("typedef", "const_type", "volatile_type", "restrict_type"):
-            root_die = await find_die_for_canonical(root.id, bin_id)  # type: ignore[arg-type]
-            if root_die is None or root_die in visited:
-                break
-            visited.add(root_die)
-            type_ref_die = await get_type_ref_die(root_die, bin_id)
-            if type_ref_die is None:
-                break
-            next_type = await get_type_by_die(type_ref_die, bin_id)
-            if next_type is None:
-                break
-            root = next_type
-
+        root, flat = result
         if root.tag not in ("structure_type", "union_type"):
             console.print(f"[yellow]Warning: {type_name!r} resolves to tag={root.tag!r}, not a struct/union[/yellow]")
-
-        # --- Recursively flatten struct fields ---
-        FlatField = tuple[int, str, str, int | None, str | None]  # (offset, path, type_name, byte_size, encoding)
-
-        async def flatten(
-            t: "CanonicalDwarfTypeModel",
-            prefix: str = "",
-            base: int = 0,
-            depth: int = 0,
-        ) -> list[FlatField]:
-            if depth > 12:
-                return []
-            members = await get_members(t.id)  # type: ignore[arg-type]
-            rows: list[FlatField] = []
-            for m in sorted(members, key=lambda x: x.byte_offset):
-                field_path = f"{prefix}.{m.name}" if m.name else f"{prefix}.<anon>"
-                abs_offset = base + m.byte_offset
-                mtype = await get_type_by_die(m.member_type_ref, bin_id)
-                if mtype is None:
-                    rows.append((abs_offset, field_path, "?", None, None))
-                    continue
-                # Follow typedef/const/volatile to leaf
-                inner = mtype
-                iv: set[int] = set()
-                while inner.tag in ("typedef", "const_type", "volatile_type", "restrict_type"):
-                    inner_die = await find_die_for_canonical(inner.id, bin_id)  # type: ignore[arg-type]
-                    if inner_die is None or inner_die in iv:
-                        break
-                    iv.add(inner_die)
-                    tref_die = await get_type_ref_die(inner_die, bin_id)
-                    if tref_die is None:
-                        break
-                    nxt = await get_type_by_die(tref_die, bin_id)
-                    if nxt is None:
-                        break
-                    inner = nxt
-                if inner.tag in ("structure_type", "union_type"):
-                    sub = await flatten(inner, prefix=field_path, base=abs_offset, depth=depth + 1)
-                    rows.extend(sub)
-                else:
-                    rows.append((abs_offset, field_path, inner.name or inner.tag, inner.byte_size, inner.encoding))
-            return rows
-
-        flat = await flatten(root, prefix=type_name)
 
         # --- Render table ---
         table = Table(title=f"cast-mem: {type_name} @ {binary}")
