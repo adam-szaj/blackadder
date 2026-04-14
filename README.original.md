@@ -1,15 +1,15 @@
 # Blackadder
 
-Linux binutils wrapper for debug. Backtrace decode, symbol resolution, memory analysis for core dumps, proc traces, prod issues.
+High-level Linux binutils wrapper for debugging. Provides backtrace decoding, symbol resolution, and memory analysis for debugging core dumps, process traces, and production issues.
 
 ## Features (MVP v0.1)
 
-- **Backtrace Decoding**: IPs → func names + source locs
-- **Address-to-Symbol Resolution**: addr → func + offset
-- **Memory Type Classification**: ID memory regions (heap, stack, text, etc.)
-- **Parallel Processing**: 10-15x faster via async/await + subprocess pool
-- **Symbol Caching**: No dup symbol resolutions across backtraces
-- **Multiple Input Formats**: raw hex, GDB, kernel backtrace formats
+- **Backtrace Decoding**: Convert instruction pointers to function names and source locations
+- **Address-to-Symbol Resolution**: Map any address to its function and offset
+- **Memory Type Classification**: Identify memory regions (heap, stack, text, etc.)
+- **Parallel Processing**: 10-15x faster than sequential via async/await and subprocess pooling
+- **Symbol Caching**: Avoid duplicate symbol resolutions across backtraces
+- **Multiple Input Formats**: Support raw hex, GDB, and kernel backtrace formats
 
 ## Installation
 
@@ -47,7 +47,7 @@ baldrick --db session.db decode-address --mapped --pid 12345 -- 0x400a1c
 
 ### 1. Capture Process State
 
-For running proc:
+For a running process:
 ```bash
 # Capture memory mappings
 cat /proc/12345/maps > my_process_maps.txt
@@ -72,7 +72,8 @@ baldrick --db session.db load-process --maps my_process_maps.txt
 baldrick --db session.db load-process --coredump core.dump
 ```
 
-Creates `ProcessSnapshot` in DB with all memory regions, auto-extracts binary metadata (sections, symbols) for all mapped files.
+This creates a `ProcessSnapshot` in the database with all memory regions and
+automatically extracts binary metadata (sections, symbols) for all mapped files.
 
 ### 3. Decode Backtraces
 
@@ -156,19 +157,19 @@ $ baldrick --db debug.db analyse-memory --pid 1
 
 ### Database Structure
 
-Single `blackadder.db` (or `--db` target) holds all data:
+A single `blackadder.db` (or whatever `--db` points to) holds all data:
 
-**Binary metadata** (static, cached by MD5 — reusable across procs):
-- `binary`: ELF files + MD5 checksums
-- `symbol`: func names + addresses
-- `section_header`: code/data/debug sections
-- `function_fingerprint`: asm hashes for version matching
+**Binary metadata** (static, cached by MD5 — reusable across processes):
+- `binary`: ELF files with MD5 checksums
+- `symbol`: Function names and addresses
+- `section_header`: Code/data/debug sections
+- `function_fingerprint`: Assembly hashes for version matching
 
-**Process snapshots** (dynamic, one per `load-process`):
-- `processsnapshot`: proc metadata
-- `memorymapping`: vaddr ranges, perms, binary paths
-- `processbinary`: links snapshots → binaries w/ match score
-- `backtrace_entry`: decoded frames w/ symbols + source locs
+**Process snapshots** (dynamic, one per `load-process` invocation):
+- `processsnapshot`: Process metadata
+- `memorymapping`: Virtual address ranges, permissions, binary paths
+- `processbinary`: Links snapshots to binaries with match score
+- `backtrace_entry`: Decoded frames with symbols and source locations
 
 ### Performance Tips
 
@@ -216,12 +217,12 @@ Database
 
 ### Modern Stack
 
-- **Python 3.12+**: latest async/await, structural pattern matching
-- **SQLModel**: unified ORM + Pydantic validation
-- **asyncio**: non-blocking I/O for subprocess + DB queries
-- **Typer**: modern async-friendly CLI
-- **Pydantic Settings**: type-safe config w/ env var support
-- **uv**: fast deterministic pkg mgmt
+- **Python 3.12+**: Latest async/await, structural pattern matching
+- **SQLModel**: Unified ORM + Pydantic validation
+- **asyncio**: Non-blocking I/O for subprocess calls and database queries
+- **Typer**: Modern async-friendly CLI framework
+- **Pydantic Settings**: Type-safe configuration with env variable support
+- **uv**: Fast deterministic package management
 
 ## Development
 
@@ -252,8 +253,8 @@ uv run mypy blackadder  # Type checking
 | Parse 10,000 symbols | ~100ms (vs 800ms sequential) |
 | Load 10 processes | ~500ms (vs 5s sequential) |
 
-**With semaphore limiting** (default: 32 concurrent procs):
-- Prevent resource exhaustion on many-core systems
+**With semaphore limiting** (default: 32 concurrent processes):
+- Prevent resource exhaustion on systems with many cores
 - Configurable via `BlackadderConfig.max_subprocess_workers`
 
 **With symbol caching**:
@@ -262,7 +263,7 @@ uv run mypy blackadder  # Type checking
 
 ## Configuration
 
-Create `.env` in project root:
+Create `.env` file in project root:
 
 ```bash
 DB=sqlite+aiosqlite:///blackadder.db
@@ -270,13 +271,13 @@ MAX_SUBPROCESS_WORKERS=32
 MAX_SYMBOL_CACHE_SIZE=100000
 ```
 
-Or env vars:
+Or use environment variables:
 ```bash
 export DB=/tmp/analysis.db
 baldrick load-process --pid 12345
 ```
 
-Or per-session via global `--db` flag:
+Or pass per-session via the global `--db` flag:
 ```bash
 baldrick --db /tmp/analysis.db load-process --pid 12345
 ```
@@ -286,16 +287,16 @@ baldrick --db /tmp/analysis.db load-process --pid 12345
 ### Implemented
 - ✅ Backtrace decoding (raw hex, GDB, kernel formats)
 - ✅ Address-to-binary mapping via /proc/maps
-- ✅ Async subprocess execution w/ resource limits
+- ✅ Async subprocess execution with resource limits
 - ✅ Symbol resolution via addr2line + objdump
-- ✅ Async DB access (SQLModel + aiosqlite)
+- ✅ Async database access (SQLModel + aiosqlite)
 - ✅ Parallel frame decoding
-- ✅ Symbol caching + LRU eviction
-- ✅ Typer CLI w/ async commands + global `--db`
+- ✅ Symbol caching and LRU eviction
+- ✅ Typer CLI with async commands and global `--db` option
 - ✅ Binary metadata auto-loaded on `load-process`
 - ✅ Core dump parsing (`load-process --coredump`)
-- ✅ Memory region classification + anomaly detection (`analyse-memory`)
-- ✅ Arch abstraction layer (x86, x86-64, ARM, ARM64, RISC-V)
+- ✅ Memory region classification and anomaly detection (`analyse-memory`)
+- ✅ Architecture abstraction layer (x86, x86-64, ARM, ARM64, RISC-V)
 - ✅ Binary fingerprinting for version-mismatch matching
 - ✅ Comprehensive pytest test suite
 
@@ -310,7 +311,7 @@ baldrick --db /tmp/analysis.db load-process --pid 12345
 
 ## Contributing
 
-See [CLAUDE.md](CLAUDE.md) for architecture details and dev notes.
+See [CLAUDE.md](CLAUDE.md) for architecture details and development notes.
 
 ## License
 

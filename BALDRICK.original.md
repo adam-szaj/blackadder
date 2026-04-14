@@ -1,10 +1,15 @@
 # Baldrick semantics
 
-Baldrick: debug/examine processes+coredumps. Collects max info from minimal input. Stores in single SQLite DB per session: binary metadata (symbols, sections, debug-info) + process data (mappings, snapshots, backtraces).
+Baldrick is a tool that helps in debugging and examining processes and
+coredumps. It collects as many information as possible from minimal input. It
+stores collected information in a single SQLite database per debugging session,
+holding both binary metadata (symbols, sections, debug-info) and process data
+(memory mappings, snapshots, backtraces).
 
 ## Global options
 
-Apply to all subcommands, placed before subcommand name:
+The following options apply to all subcommands and must be placed before the
+subcommand name:
 
     --db | -d <db-file>       Path to database (default from config / env)
     --debug                   Enable DEBUG level logging
@@ -22,9 +27,15 @@ Example:
     - rootfs: [--rootfs | -R] <path>, default: /
     - debugfs: [--debugfs | -D] <debugfs-path>, default: <same-as-rootfs>
 
-rootfs = param, default `/`. Stripped binaries store debug-info/symbols in separate files via `.debug_link` section (abs or rel path or filename).
+Path to rootfs is a parameter and default is /
+Often binaries are stripped and debug-info, symbols and other data are stored in
+separated files. Typically .debug_link section is used which contains path
+(absolute or relative) or just filename.
 
-Binary at `<prefix>/lib/libfoo.so`. Check debug file at:
+Let's assume the binary is under path:
+<prefix>/lib/libfoo.so
+
+Following paths should be checked for debug file.
 
 if debugfs is the same as rootfs:
     <rootfs><absolute-debug-link>
@@ -39,7 +50,7 @@ else:
     <debugfs><prefix>/.debug/lib/<relative-debug-link>
     <debugfs><prefix>/.debug/**/<relative-debug-link>
 
-If `<debug-link>` absent in binary:
+If <debug-link> does not exist in binary (libfoo.so),
 
 if debugfs is the same as rootfs:
     <prefix>/lib/libfoo.so<suffix>
@@ -65,7 +76,8 @@ where:
 
 **load <parameters>**
 
-Populates only binary metadata (sections, symbols, debug-info). No process snapshot.
+Populates only the binary metadata in the database (sections, symbols, debug-info).
+Does not create a process snapshot.
 
 parameters:
     [ --rootfs | -R <rootfs> ]
@@ -89,7 +101,9 @@ parameters:
 
 **load-types <parameters>**
 
-Load DWARF type defs + `.debug_line` mappings from single already-indexed binary. Idempotent — skips if already loaded.
+Load DWARF type definitions and `.debug_line` source line→address mappings from a
+single binary that is already indexed (run `load` first). Idempotent — safe to
+re-run; skips if already loaded.
 
 parameters:
     --binary | -b <binary-path>   - path to the binary file
@@ -100,7 +114,9 @@ Example:
 
 **cast-mem <parameters>**
 
-Interpret raw memory bytes as named C struct/typedef from indexed binary. Recursively expands nested structs. Outputs table: byte offsets, field paths, types, hex+decimal values.
+Interpret raw memory bytes as a named C struct/typedef from an indexed binary.
+Recursively expands nested structs. Outputs a table with byte offsets, field paths,
+types, and hex + decimal values.
 
 parameters:
     --type <name>           - struct/typedef name (e.g. pthread_mutex_t)
@@ -116,7 +132,8 @@ Example:
 
 **load-process <parameters>**
 
-Creates process snapshot + populates binary metadata for all mapped files. Captures per-thread state (wchan, syscall, name, stack bounds) when possible.
+Creates a process snapshot and populates binary metadata for all mapped files.
+Also captures per-thread state (wchan, syscall, name, stack bounds) when possible.
 
 parameters:
     [ --rootfs | -R <rootfs> ]
@@ -130,7 +147,8 @@ parameters:
 
 **decode-backtrace <parameters>**
 
-Decode backtrace: resolve each addr → symbol + source location. Auto-detects input format (raw hex, GDB, kernel).
+Decode a backtrace by resolving each address to its symbol and source location.
+Auto-detects input format (raw hex, GDB, kernel).
 
 parameters:
     [ --rootfs | -R <rootfs> ]
@@ -147,7 +165,7 @@ Input formats auto-detected:
 
 **decode-address <parameters> -- <list-of-addresses>**
 
-Translate addr → symbol + additional binary/process info.
+Translate address to symbol. Additionally prints other information collected from binary and process.
 
 parameters:
     [ --rootfs | -R <rootfs> ]
@@ -167,7 +185,9 @@ parameters:
 
 **analyse-memory <parameters>**
 
-Analyze memory layout, detect anomalies. Different info available depending on input. No `--db` = transient in-memory analysis.
+Analyze memory layout and detect anomalies.
+Depending on provided data a different set of information can be provided.
+When no --db is given, analysis is transient (in-memory only).
 
 parameters:
     [ --rootfs | -R <rootfs> ]
@@ -180,7 +200,9 @@ parameters:
 
 **analyse-deadlock <parameters>**
 
-Detect deadlocks in previously loaded process snapshot. 3-tier evidence: certain (futex syscall / GDB mutex graph) → probable (pthread_mutex_lock in backtrace) → possible (wchan=futex_wait).
+Detect deadlocks in a previously loaded process snapshot.
+Uses 3-tier evidence degradation: certain (futex syscall / GDB mutex graph) →
+probable (pthread_mutex_lock in backtrace) → possible (wchan=futex_wait).
 
 parameters:
     --snapshot-id | -s <id>              - ID of ProcessSnapshot to analyse
@@ -188,7 +210,8 @@ parameters:
                                            (BALDRICK_LOCK_STATE_BEGIN … END format)
     [ --json ]                           - emit JSON instead of Rich table
 
-Output: evidence level (certain/probable/possible/none), deadlock cycles with TIDs, suspected threads without cycle.
+Output shows evidence level (certain / probable / possible / none), detected
+deadlock cycles with participating TIDs, and suspected threads with no cycle.
 
 Example — live process:
     baldrick --db session.db load-process --pid 12345
@@ -207,7 +230,9 @@ Note: GDB live attach requires ptrace_scope=0:
 
 **query <name> [key=value ...]**
 
-Run built-in or user-defined SQL query against DB. Params as positional `key=value`. Inline SQL via `sql="SELECT ..."`.
+Run a built-in or user-defined SQL query against the database.
+Parameters are passed as positional `key=value` arguments after the query name.
+Inline SQL is run by passing `sql="SELECT ..."` as the first argument.
 
 Built-in queries:
 
@@ -246,14 +271,15 @@ Examples:
 
 **schema**
 
-Print DB schema (all tables, columns, types).
+Print the database schema (all tables, columns, and types).
 
     baldrick --db session.db schema
 
 
 ## Aliases
 
-Aliases in `~/.baldrick.toml` (user) and `./baldrick.toml` (local, priority). Syntax mirrors gitconfig.
+Baldrick supports command aliases in `~/.baldrick.toml` (user-level) and
+`./baldrick.toml` (local, takes priority). Syntax mirrors gitconfig aliases.
 
 ```toml
 [alias]
@@ -271,4 +297,6 @@ Usage:
     baldrick --db session.db qt id=1
     baldrick --db session.db qdl id=1
 
-Aliases expanded before flag parsing — extra args appended verbatim (like git). One expansion level only; no alias chaining.
+Aliases are expanded before any flag parsing — extra arguments after the alias
+are appended verbatim, exactly like git aliases. One level of expansion only
+(aliases cannot reference other aliases).
