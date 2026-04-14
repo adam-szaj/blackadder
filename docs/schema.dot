@@ -1,0 +1,333 @@
+// Blackadder database schema — ERD in DOT format
+// Render: dot -Tsvg docs/schema.dot -o docs/schema.svg
+//         dot -Tpng docs/schema.dot -o docs/schema.png
+
+digraph blackadder_schema {
+    graph [
+        rankdir = "LR"
+        fontname = "Helvetica"
+        fontsize = 12
+        pad = 0.5
+        splines = ortho
+        nodesep = 0.6
+        ranksep = 1.2
+    ]
+    node [
+        shape = "none"
+        fontname = "Helvetica"
+        fontsize = 11
+    ]
+    edge [
+        fontname = "Helvetica"
+        fontsize = 9
+        arrowhead = crow
+        arrowtail = tee
+        dir = both
+    ]
+
+    // =========================================================
+    // Rootfs / binary-metadata tables
+    // =========================================================
+
+    subgraph cluster_rootfs {
+        label = "Binary metadata (rootfs)"
+        style = filled
+        fillcolor = "#f0f4ff"
+        color = "#4466cc"
+        fontname = "Helvetica Bold"
+        fontsize = 13
+
+        binary [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#dce8ff">
+            <TR><TD ALIGN="LEFT"><B>binary</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">md5sum TEXT UNIQUE</TD></TR>
+            <TR><TD ALIGN="LEFT">name TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">debug_link TEXT</TD></TR>
+            </TABLE>>]
+
+        binarylocator [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#dce8ff">
+            <TR><TD ALIGN="LEFT"><B>binarylocator</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">path TEXT UNIQUE</TD></TR>
+            <TR><TD ALIGN="LEFT">md5sum TEXT FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">mtime INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">debug_file TEXT</TD></TR>
+            </TABLE>>]
+
+        sectionheader [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#dce8ff">
+            <TR><TD ALIGN="LEFT"><B>sectionheader</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_id INTEGER FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">idx INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">name TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">size INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">vma INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">lma INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">off INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">align INTEGER</TD></TR>
+            </TABLE>>]
+
+        symbol [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#dce8ff">
+            <TR><TD ALIGN="LEFT"><B>symbol</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_id INTEGER FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">address INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">scope TEXT(1)</TD></TR>
+            <TR><TD ALIGN="LEFT">sym_type TEXT(1)</TD></TR>
+            <TR><TD ALIGN="LEFT">section TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">size INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">name TEXT</TD></TR>
+            </TABLE>>]
+
+        functionfingerprint [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#dce8ff">
+            <TR><TD ALIGN="LEFT"><B>functionfingerprint</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_id INTEGER FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">func_name TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">func_offset INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">func_size INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">content_hash TEXT</TD></TR>
+            </TABLE>>]
+
+        symbolcache [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#dce8ff">
+            <TR><TD ALIGN="LEFT"><B>symbolcache</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_id INTEGER FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">offset INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">symbol TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">source_file TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">source_line INTEGER</TD></TR>
+            </TABLE>>]
+    }
+
+    // =========================================================
+    // DWARF type tables
+    // =========================================================
+
+    subgraph cluster_dwarf {
+        label = "DWARF types (canonical, deduplicated)"
+        style = filled
+        fillcolor = "#fff4e0"
+        color = "#cc8800"
+        fontname = "Helvetica Bold"
+        fontsize = 13
+
+        canonical_dwarf_type [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#ffe8b0">
+            <TR><TD ALIGN="LEFT"><B>canonical_dwarf_type</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">tag TEXT  <I>("structure_type", "base_type", …)</I></TD></TR>
+            <TR><TD ALIGN="LEFT">name TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">byte_size INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">encoding TEXT  <I>("signed", "float", …)</I></TD></TR>
+            <TR><TD ALIGN="LEFT"><I>UNIQUE(tag, name, byte_size, encoding)</I></TD></TR>
+            </TABLE>>]
+
+        binary_dwarf_ref [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#ffe8b0">
+            <TR><TD ALIGN="LEFT"><B>binary_dwarf_ref</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_id INTEGER FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">die_offset INTEGER  <I>(local per binary)</I></TD></TR>
+            <TR><TD ALIGN="LEFT">canonical_id INTEGER FK→canonical_dwarf_type</TD></TR>
+            <TR><TD ALIGN="LEFT">type_ref_die INTEGER  <I>(die_offset of referenced type)</I></TD></TR>
+            <TR><TD ALIGN="LEFT"><I>UNIQUE(binary_id, die_offset)</I></TD></TR>
+            </TABLE>>]
+
+        dwarfmember [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#ffe8b0">
+            <TR><TD ALIGN="LEFT"><B>dwarfmember</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">canonical_type_id INTEGER FK→canonical_dwarf_type</TD></TR>
+            <TR><TD ALIGN="LEFT">name TEXT  <I>(NULL for anonymous)</I></TD></TR>
+            <TR><TD ALIGN="LEFT">byte_offset INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">member_type_ref INTEGER  <I>(die_offset, resolve via binary_dwarf_ref)</I></TD></TR>
+            </TABLE>>]
+    }
+
+    // =========================================================
+    // Debug line / source file tables
+    // =========================================================
+
+    subgraph cluster_debugline {
+        label = "Debug line info"
+        style = filled
+        fillcolor = "#f0fff0"
+        color = "#228833"
+        fontname = "Helvetica Bold"
+        fontsize = 13
+
+        sourcefile [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#c8f0c8">
+            <TR><TD ALIGN="LEFT"><B>sourcefile</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">path TEXT UNIQUE</TD></TR>
+            </TABLE>>]
+
+        debugline [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#c8f0c8">
+            <TR><TD ALIGN="LEFT"><B>debugline</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_id INTEGER FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">source_file_id INTEGER FK→sourcefile</TD></TR>
+            <TR><TD ALIGN="LEFT">line_number INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">address INTEGER</TD></TR>
+            </TABLE>>]
+    }
+
+    // =========================================================
+    // Process snapshot tables
+    // =========================================================
+
+    subgraph cluster_process {
+        label = "Process snapshots"
+        style = filled
+        fillcolor = "#fff0f8"
+        color = "#aa2266"
+        fontname = "Helvetica Bold"
+        fontsize = 13
+
+        processsnapshot [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#f8d8ec">
+            <TR><TD ALIGN="LEFT"><B>processsnapshot</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">pid INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">tag TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">created_at DATETIME</TD></TR>
+            <TR><TD ALIGN="LEFT">description TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">source_type TEXT  <I>("maps","coredump","gdb_dump")</I></TD></TR>
+            <TR><TD ALIGN="LEFT">source_path TEXT</TD></TR>
+            </TABLE>>]
+
+        thread [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#f8d8ec">
+            <TR><TD ALIGN="LEFT"><B>thread</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">process_id INTEGER FK→processsnapshot</TD></TR>
+            <TR><TD ALIGN="LEFT">tid INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">name TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">wchan TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">syscall TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">stack_start INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">stack_end INTEGER</TD></TR>
+            </TABLE>>]
+
+        memorymapping [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#f8d8ec">
+            <TR><TD ALIGN="LEFT"><B>memorymapping</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">process_id INTEGER FK→processsnapshot</TD></TR>
+            <TR><TD ALIGN="LEFT">start_addr INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">end_addr INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">perms TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">offset INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">dev TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">inode INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">pathname TEXT</TD></TR>
+            </TABLE>>]
+
+        processbinary [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#f8d8ec">
+            <TR><TD ALIGN="LEFT"><B>processbinary</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">process_id INTEGER FK→processsnapshot</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_id INTEGER FK→binary</TD></TR>
+            <TR><TD ALIGN="LEFT">mapping_id INTEGER FK→memorymapping</TD></TR>
+            <TR><TD ALIGN="LEFT">binary_load_addr INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">match_score REAL</TD></TR>
+            <TR><TD ALIGN="LEFT">match_method TEXT</TD></TR>
+            </TABLE>>]
+
+        backtraceentry [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#f8d8ec">
+            <TR><TD ALIGN="LEFT"><B>backtraceentry</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">process_id INTEGER FK→processsnapshot</TD></TR>
+            <TR><TD ALIGN="LEFT">thread_id INTEGER FK→thread</TD></TR>
+            <TR><TD ALIGN="LEFT">frame_num INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">address INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">resolved_symbol TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">resolved_file TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">resolved_line INTEGER</TD></TR>
+            <TR><TD ALIGN="LEFT">match_confidence TEXT</TD></TR>
+            </TABLE>>]
+
+        processregisterstate [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#f8d8ec">
+            <TR><TD ALIGN="LEFT"><B>processregisterstate</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">process_id INTEGER FK→processsnapshot</TD></TR>
+            <TR><TD ALIGN="LEFT">thread_id INTEGER FK→thread</TD></TR>
+            <TR><TD ALIGN="LEFT">arch TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">registers_json TEXT</TD></TR>
+            </TABLE>>]
+
+        memoryregionanalysis [label=<
+            <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="2" BGCOLOR="#f8d8ec">
+            <TR><TD ALIGN="LEFT"><B>memoryregionanalysis</B></TD></TR>
+            <HR/>
+            <TR><TD ALIGN="LEFT"><U>id</U> INTEGER PK</TD></TR>
+            <TR><TD ALIGN="LEFT">process_id INTEGER FK→processsnapshot</TD></TR>
+            <TR><TD ALIGN="LEFT">mapping_id INTEGER FK→memorymapping</TD></TR>
+            <TR><TD ALIGN="LEFT">region_type TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">anomalies_json TEXT</TD></TR>
+            <TR><TD ALIGN="LEFT">is_corruption_indicator BOOLEAN</TD></TR>
+            </TABLE>>]
+    }
+
+    // =========================================================
+    // Edges (foreign keys)
+    // =========================================================
+
+    // binary ← rootfs tables
+    binarylocator   -> binary            [label="md5sum"]
+    sectionheader   -> binary            [label="binary_id"]
+    symbol          -> binary            [label="binary_id"]
+    functionfingerprint -> binary        [label="binary_id"]
+    symbolcache     -> binary            [label="binary_id"]
+
+    // DWARF
+    binary_dwarf_ref -> binary           [label="binary_id"]
+    binary_dwarf_ref -> canonical_dwarf_type [label="canonical_id"]
+    dwarfmember     -> canonical_dwarf_type  [label="canonical_type_id"]
+
+    // debug line
+    debugline       -> binary            [label="binary_id"]
+    debugline       -> sourcefile        [label="source_file_id"]
+
+    // process
+    thread              -> processsnapshot  [label="process_id"]
+    memorymapping       -> processsnapshot  [label="process_id"]
+    processbinary       -> processsnapshot  [label="process_id"]
+    processbinary       -> binary           [label="binary_id"]
+    processbinary       -> memorymapping    [label="mapping_id"]
+    backtraceentry      -> processsnapshot  [label="process_id"]
+    backtraceentry      -> thread           [label="thread_id"]
+    processregisterstate -> processsnapshot [label="process_id"]
+    processregisterstate -> thread          [label="thread_id"]
+    memoryregionanalysis -> processsnapshot [label="process_id"]
+    memoryregionanalysis -> memorymapping   [label="mapping_id"]
+}
