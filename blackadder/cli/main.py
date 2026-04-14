@@ -1666,6 +1666,217 @@ async def analyse_deadlock(
 
 
 @app.command()
+async def report(
+    snapshot_id: int | None = typer.Option(None, "--snapshot-id", "-s", help="ProcessSnapshot ID (default: latest)"),
+    output_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """
+    Generate a comprehensive debug report for a process snapshot.
+
+    Combines snapshot info, thread state, memory anomalies, deadlock analysis,
+    and crash pattern detection into a single report.
+
+    Example:
+        baldrick --db session.db report
+        baldrick --db session.db report --snapshot-id 1
+        baldrick --db session.db report --snapshot-id 1 --json
+    """
+    import json as _json
+    from dataclasses import asdict
+
+    from sqlmodel import select as sql_select
+
+    from blackadder.crash_patterns import CrashPatternEngine
+    from blackadder.models import BacktraceEntry, MemoryMapping, ProcessRegisterState, ProcessSnapshot, Thread
+
+    config = _get_config_or_default()
+
+    try:
+        manager = _db_manager(_global_db, config)
+        await manager.create_all()
+        db_proc = ProcessDatabase(manager, config)
+
+        snapshot_id = await _resolve_snapshot_id(db_proc, snapshot_id)
+
+        async with manager.get_session() as session:
+            snap_result = await session.execute(  # type: ignore
+                sql_select(ProcessSnapshot).where(ProcessSnapshot.id == snapshot_id)
+            )
+            snapshot = snap_result.scalar_one_or_none()
+            if snapshot is None:
+                console.print(f"[red]Error: Snapshot #{snapshot_id} not found.[/red]")
+                raise typer.Exit(1)
+
+            threads = (await session.execute(  # type: ignore
+                sql_select(Thread).where(Thread.process_id == snapshot_id)
+            )).scalars().all()
+
+            backtraces = (await session.execute(  # type: ignore
+                sql_select(BacktraceEntry).where(BacktraceEntry.process_id == snapshot_id)
+            )).scalars().all()
+
+            mappings = (await session.execute(  # type: ignore
+                sql_select(MemoryMapping).where(MemoryMapping.process_id == snapshot_id)
+            )).scalars().all()
+
+            register_states = (await session.execute(  # type: ignore
+                sql_select(ProcessRegisterState).where(ProcessRegisterState.process_id == snapshot_id)
+            )).scalars().all()
+
+        deadlock_report = await db_proc.get_deadlock_report(snapshot_id)
+        memory_result = await db_proc.analyze_memory_layout(snapshot_id)
+        await manager.close()
+
+        pattern_report = CrashPatternEngine(
+            threads=list(threads),
+            backtraces=list(backtraces),
+            mappings=list(mappings),
+            register_states=list(register_states),
+            deadlock_report=deadlock_report,
+        ).analyze()
+
+        # ── JSON output ───────────────────────────────────────────────────────
+        if output_json:
+            result = {
+                "snapshot": snapshot.model_dump(),
+                "threads": [
+                    {"tid": t.tid, "name": t.name, "wchan": t.wchan, "syscall": t.syscall}
+                    for t in threads
+                ],
+                "memory": memory_result,
+                "deadlock": asdict(deadlock_report),
+                "crash_patterns": asdict(pattern_report),
+            }
+            console.print(_json.dumps(result, indent=2, default=str))
+            return
+
+        # ── Rich output ───────────────────────────────────────────────────────
+        console.print()
+        console.print(
+            f"[bold cyan]═══ Blackadder Debug Report ═══[/bold cyan]"
+        )
+
+        # 1. Header
+        src = snapshot.source_type or "unknown"
+        pid_str = str(snapshot.pid) if snapshot.pid else "—"
+        tag_str = snapshot.tag or "—"
+        console.print(
+            f"  Snapshot [cyan]#{snapshot.id}[/cyan]  "
+            f"PID [yellow]{pid_str}[/yellow]  "
+            f"source=[dim]{src}[/dim]  "
+            f"tag=[dim]{tag_str}[/dim]  "
+            f"[dim]{snapshot.created_at}[/dim]"
+        )
+
+        # 2. Threads
+        console.print()
+        console.print("[bold]Threads[/bold]")
+        if threads:
+            t_table = Table(show_header=True, header_style="bold")
+            t_table.add_column("TID", style=_theme.meta, no_wrap=True)
+            t_table.add_column("Name", style=_theme.symbol)
+            t_table.add_column("wchan", style=_theme.description)
+            t_table.add_column("syscall", style=_theme.flags)
+            for t in list(threads)[:20]:
+                t_table.add_row(
+                    str(t.tid),
+                    t.name or "—",
+                    t.wchan or "—",
+                    (t.syscall or "—")[:40],
+                )
+            console.print(t_table)
+            if len(threads) > 20:
+                console.print(f"[dim]  … {len(threads) - 20} more threads[/dim]")
+        else:
+            console.print("  [dim]No thread data.[/dim]")
+
+        # 3. Memory Anomalies
+        console.print()
+        console.print("[bold]Memory Anomalies[/bold]")
+        anomalies = memory_result.get("anomalies", [])
+        corruption_risk = memory_result.get("corruption_risk", 0.0)
+        if anomalies:
+            risk_color = "red" if corruption_risk > 0.3 else "yellow" if corruption_risk > 0.1 else "green"
+            console.print(
+                f"  Corruption risk: [{risk_color}]{corruption_risk:.0%}[/{risk_color}]  "
+                f"({memory_result.get('corruption_count', 0)} region(s))"
+            )
+            for a in anomalies[:10]:
+                console.print(f"  [yellow]•[/yellow] {a}")
+            if len(anomalies) > 10:
+                console.print(f"  [dim]… {len(anomalies) - 10} more anomalies[/dim]")
+        else:
+            console.print("  [green]✓ No anomalies detected.[/green]")
+
+        # 4. Deadlock
+        console.print()
+        console.print("[bold]Deadlock Analysis[/bold]")
+        dl_color = {
+            "certain": "red", "probable": "yellow", "possible": "cyan", "none": "green",
+        }.get(deadlock_report.evidence_level, "white")
+        console.print(
+            f"  Evidence: [{dl_color}]{deadlock_report.evidence_level}[/{dl_color}]"
+        )
+        if deadlock_report.evidence_level != "none":
+            for cycle in deadlock_report.cycles:
+                console.print(
+                    f"  [red]CYCLE[/red] ({cycle.evidence_level}): "
+                    + " → ".join(f"TID {t}" for t in cycle.tids)
+                )
+            for st in deadlock_report.suspected_threads:
+                console.print(
+                    f"  [yellow]SUSPECT[/yellow] TID {st.tid} ({st.name or '?'}) — {st.evidence}"
+                )
+
+        # 5. Crash Patterns
+        console.print()
+        console.print("[bold]Crash Patterns[/bold]")
+        if pattern_report.patterns:
+            cp_table = Table(show_header=True, header_style="bold")
+            cp_table.add_column("Pattern", style=_theme.symbol, no_wrap=True)
+            cp_table.add_column("Confidence", no_wrap=True)
+            cp_table.add_column("Description", style=_theme.description)
+            cp_table.add_column("Suggestion", style=_theme.meta)
+            conf_colors = {"certain": "red", "probable": "yellow", "possible": "cyan"}
+            for p in pattern_report.patterns:
+                cc = conf_colors.get(p.confidence, "white")
+                cp_table.add_row(
+                    p.name,
+                    f"[{cc}]{p.confidence}[/{cc}]",
+                    p.description,
+                    p.suggestion[:60] + ("…" if len(p.suggestion) > 60 else ""),
+                )
+            console.print(cp_table)
+            for p in pattern_report.patterns:
+                if p.evidence:
+                    console.print(f"  [dim]{p.name} evidence:[/dim]")
+                    for ev in p.evidence:
+                        console.print(f"    [dim]• {ev}[/dim]")
+        else:
+            console.print("  [green]✓ No crash patterns detected.[/green]")
+
+        # 6. Summary
+        console.print()
+        deadlock_yn = "YES" if deadlock_report.evidence_level != "none" else "no"
+        dl_sum_color = "red" if deadlock_report.evidence_level != "none" else "green"
+        console.print(
+            f"[bold]Summary:[/bold] "
+            f"{len(threads)} thread(s)  "
+            f"{len(anomalies)} anomaly(ies)  "
+            f"deadlock=[{dl_sum_color}]{deadlock_yn}[/{dl_sum_color}]  "
+            f"{len(pattern_report.patterns)} pattern(s)  "
+            f"[dim]{pattern_report.summary}[/dim]"
+        )
+        console.print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
 async def tag(
     args: list[str] = typer.Argument(default=None, help="[SNAPSHOT_ID] TAG  — snapshot ID is optional (default: latest)"),
 ) -> None:

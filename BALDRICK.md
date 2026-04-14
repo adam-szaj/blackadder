@@ -205,6 +205,28 @@ Note: GDB live attach requires ptrace_scope=0:
     echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 
 
+**report <parameters>**
+
+Generate comprehensive debug report for a process snapshot. Combines snapshot info, thread state, memory anomalies, deadlock analysis, and crash pattern detection.
+
+parameters:
+    [ --snapshot-id | -s <id> ]   - snapshot ID (default: latest)
+    [ --json ]                    - output as JSON
+
+Crash patterns detected:
+    deadlock         — forwarded from analyse-deadlock (certain/probable/possible)
+    stack-overflow   — SP within 4096 bytes of stack boundary
+    null-deref       — instruction pointer near NULL (< 0x1000)
+    use-after-free   — free()+alloc() in same thread backtrace [+RWX region]
+    double-free      — free() appears ≥2× in one thread backtrace
+    rwx-region       — RWX non-library anonymous region (potential code injection)
+
+Example:
+    baldrick --db session.db report
+    baldrick --db session.db report --snapshot-id 1
+    baldrick --db session.db report --snapshot-id 1 --json
+
+
 **query <name> [key=value ...]**
 
 Run built-in or user-defined SQL query against DB. Params as positional `key=value`. Inline SQL via `sql="SELECT ..."`.
