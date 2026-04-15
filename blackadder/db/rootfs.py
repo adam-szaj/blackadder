@@ -443,16 +443,19 @@ class RootfsDatabase:
                     {"dbg": payload.debug_file_path, "id": loc.id},
                 )
 
-            if has_symbols and payload.sym_source == payload.binary_path:
-                # Already fully loaded, nothing to do
-                return {"loaded": 0, "skipped": 1, "types": 0, "members": 0, "lines": 0}
-
-            # Re-load symbols (debug file now available or symbols were missing)
-            if has_symbols:
-                await conn.execute(
-                    _SA_TEXT("DELETE FROM symbol WHERE binary_id=:bid"),
-                    {"bid": binary_id},
-                )
+            symbols_already_ok = has_symbols and payload.sym_source == payload.binary_path
+            if symbols_already_ok:
+                # Symbols already loaded — but still need to write types/lines if requested
+                if not payload.load_types and not payload.load_lines:
+                    return {"loaded": 0, "skipped": 1, "types": 0, "members": 0, "lines": 0}
+                # Fall through to write types/lines; skip symbol reload below
+            else:
+                # Re-load symbols (debug file now available or symbols were missing)
+                if has_symbols:
+                    await conn.execute(
+                        _SA_TEXT("DELETE FROM symbol WHERE binary_id=:bid"),
+                        {"bid": binary_id},
+                    )
         else:
             # New binary
             await conn.execute(
@@ -487,8 +490,8 @@ class RootfsDatabase:
                  "mtime": payload.mtime, "dbg": payload.debug_file_path},
             )
 
-        # Symbols (bulk, shared path for new and reload)
-        if payload.symbols:
+        # Symbols (bulk, shared path for new and reload — skip if already loaded)
+        if payload.symbols and not symbols_already_ok:
             await raw_conn.executemany(
                 "INSERT OR IGNORE INTO symbol"
                 " (binary_id, address, scope, sym_type, section, size, name)"
