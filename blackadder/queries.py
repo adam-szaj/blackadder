@@ -223,6 +223,38 @@ BUILTIN_QUERIES: list[QueryDef] = [
         description="Addresses corresponding to a source file:line (reverse addr2line)",
         params=["binary", "file", "line"],
     ),
+    QueryDef(
+        name="addr2line",
+        sql=(
+            "SELECT b.name AS binary, sc.offset, sc.symbol, sc.source_file, sc.source_line "
+            "FROM symbolcache sc "
+            "JOIN binary b ON b.id = sc.binary_id "
+            "WHERE b.name = :binary "
+            "  AND sc.offset = CAST(:addr AS INTEGER) "
+            "ORDER BY sc.source_file, sc.source_line"
+        ),
+        description="Binary offset → symbol + source location (symbol cache). addr = offset within binary.",
+        params=["binary", "addr"],
+    ),
+    QueryDef(
+        name="addr2line-snap",
+        sql=(
+            "SELECT b.name AS binary, "
+            "       CAST(:addr AS INTEGER) - pb.binary_load_addr AS offset, "
+            "       sc.symbol, sc.source_file, sc.source_line "
+            "FROM processbinary pb "
+            "JOIN binary b ON b.id = pb.binary_id "
+            "JOIN memorymapping m ON m.id = pb.mapping_id "
+            "JOIN symbolcache sc ON sc.binary_id = b.id "
+            "  AND sc.offset = CAST(:addr AS INTEGER) - pb.binary_load_addr "
+            "WHERE pb.process_id = CAST(:id AS INTEGER) "
+            "  AND CAST(:addr AS INTEGER) >= m.start_addr "
+            "  AND CAST(:addr AS INTEGER) <  m.end_addr "
+            "ORDER BY sc.source_file, sc.source_line"
+        ),
+        description="Virtual address → symbol + source location via snapshot mapping. addr = runtime VA.",
+        params=["id", "addr"],
+    ),
 ]
 
 _BUILTIN_MAP: dict[str, QueryDef] = {q.name: q for q in BUILTIN_QUERIES}

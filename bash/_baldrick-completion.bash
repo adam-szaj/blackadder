@@ -229,7 +229,10 @@ _baldrick_complete_load() {
 _baldrick_complete_load_types() {
     local cur="$1" prev="$2"
     case "$prev" in
-        --binary|-b) _filedir; return ;;
+        --binary|-b)
+            _baldrick_pick_binary
+            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
+            return ;;
     esac
     COMPREPLY=( $(compgen -W "--binary -b" -- "$cur") )
 }
@@ -256,14 +259,19 @@ _baldrick_complete_load_process() {
     case "$prev" in
         --maps|-m)                _filedir;    return ;;
         --coredump|-C)            _filedir;    return ;;
+        --gdb-dump)               _filedir;    return ;;
         --rootfs|-R|--debugfs|-D) _filedir -d; return ;;
         --tag|-T)
             _baldrick_pick_tag
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
+        --snapshot-id)
+            _baldrick_pick_snapshot
+            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
+            return ;;
     esac
     COMPREPLY=( $(compgen -W \
-        "--maps -m --pid -p --coredump -C --rootfs -R --debugfs -D --tag -T" \
+        "--maps -m --pid -p --coredump -C --gdb-dump --rootfs -R --debugfs -D --tag -T --snapshot-id --update" \
         -- "$cur") )
 }
 
@@ -343,6 +351,20 @@ _baldrick_complete_tag() {
     fi
 }
 
+_baldrick_complete_analyse_deadlock() {
+    local cur="$1" prev="$2"
+    case "$prev" in
+        --snapshot-id|-s)
+            _baldrick_pick_snapshot
+            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
+            return ;;
+        --lock-state)
+            _filedir
+            return ;;
+    esac
+    COMPREPLY=( $(compgen -W "--snapshot-id -s --lock-state --json" -- "$cur") )
+}
+
 _baldrick_complete_query() {
     local cur="$1" prev="$2"
 
@@ -372,7 +394,7 @@ _baldrick_complete_query() {
         --param|-p)
             # Context-aware: what param does this query expect?
             case "$query_name" in
-                symbols|sections)
+                symbols|sections|symbol-cache|types)
                     # --param binary=<name>
                     # If --tag or --pid already on line, scope to that snapshot
                     local snap_id
@@ -393,10 +415,57 @@ _baldrick_complete_query() {
                     fi
                     [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("binary=$_BALDRICK_FZF_RESULT")
                     ;;
-                mappings|libs|rwx|backtrace|process-binaries)
+                mappings|libs|rwx|backtrace|process-binaries|threads|deadlock-threads)
                     # --param id=<snapshot_id>
                     _baldrick_pick_snapshot
                     [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("id=$_BALDRICK_FZF_RESULT")
+                    ;;
+                addr2line)
+                    # --param binary=<name> addr=<offset in binary>
+                    case "$cur" in
+                        binary=*)
+                            _baldrick_pick_binary
+                            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("binary=$_BALDRICK_FZF_RESULT")
+                            ;;
+                        *)
+                            COMPREPLY=( $(compgen -W "binary= addr=" -- "$cur") )
+                            ;;
+                    esac
+                    ;;
+                addr2line-snap)
+                    # --param id=<snapshot_id> addr=<virtual address>
+                    case "$cur" in
+                        id=*)
+                            _baldrick_pick_snapshot
+                            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("id=$_BALDRICK_FZF_RESULT")
+                            ;;
+                        *)
+                            COMPREPLY=( $(compgen -W "id= addr=" -- "$cur") )
+                            ;;
+                    esac
+                    ;;
+                struct|type-offset|line2addr)
+                    # --param name=... binary=... (or file= line= for line2addr)
+                    # First offer binary pick; raw fallback for name/file/line
+                    case "$cur" in
+                        binary=*)
+                            _baldrick_pick_binary
+                            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("binary=$_BALDRICK_FZF_RESULT")
+                            ;;
+                        *)
+                            if [[ "$query_name" == "line2addr" ]]; then
+                                COMPREPLY=( $(compgen -W "binary= file= line=" -- "$cur") )
+                            elif [[ "$query_name" == "type-offset" ]]; then
+                                COMPREPLY=( $(compgen -W "name= offset= binary=" -- "$cur") )
+                            else
+                                COMPREPLY=( $(compgen -W "name= binary=" -- "$cur") )
+                            fi
+                            ;;
+                    esac
+                    ;;
+                symbol-cache-stats)
+                    # No params needed
+                    COMPREPLY=()
                     ;;
                 *)
                     COMPREPLY=( $(compgen -W "id= binary= tag=" -- "$cur") )
@@ -471,7 +540,7 @@ _baldrick_complete() {
         decode-backtrace)   _baldrick_complete_decode_backtrace   "$cur" "$prev" ;;
         decode-address)     _baldrick_complete_decode_address     "$cur" "$prev" ;;
         analyse-memory)     _baldrick_complete_analyse_memory     "$cur" "$prev" ;;
-        analyse-deadlock)   COMPREPLY=( $(compgen -W "--snapshot-id -s --lock-state --json" -- "$cur") ) ;;
+        analyse-deadlock)   _baldrick_complete_analyse_deadlock   "$cur" "$prev" ;;
         tag)                _baldrick_complete_tag                "$cur" "$prev" ;;
         query)              _baldrick_complete_query              "$cur" "$prev" ;;
         schema)             COMPREPLY=() ;;

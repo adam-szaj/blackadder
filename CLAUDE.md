@@ -356,6 +356,8 @@ Full docs + example output: `docs/queries.md`
 | struct | name, binary | load --types | Fields of a named struct with byte offsets |
 | type-offset | name, offset, binary | load --types | Field at a given byte offset in a struct |
 | line2addr | binary, file, line | load --lines | Source file:line → binary addresses |
+| addr2line | binary, addr | load-process | Binary offset → symbol + source location (symbol cache) |
+| addr2line-snap | id, addr | load-process | Virtual address → symbol + source via snapshot mapping |
 
 ## Important Concurrency Notes
 
