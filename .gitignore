@@ -78,3 +78,6 @@ scripts/
 
 # Plan files
 .claude/
+.gdb_history
+claude.resume
+Session.vim
