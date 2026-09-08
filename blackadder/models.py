@@ -233,6 +233,74 @@ class DwarfMember(SQLModel, table=True):
     canonical_type: "CanonicalDwarfType" = Relationship(back_populates="members")
 
 
+class DwarfSubprogram(SQLModel, table=True):
+    """
+    DW_TAG_subprogram from DWARF debug info.
+
+    Stores function name and die_offset (binary-local) so DwarfVariable
+    records can reference their enclosing function.
+
+    Scoped to a binary — die_offset is binary-local.
+    UNIQUE on (binary_id, die_offset).
+    """
+
+    __tablename__ = "dwarfsubprogram"
+
+    id: int | None = Field(default=None, primary_key=True)
+    binary_id: int = Field(foreign_key="binary.id", index=True)
+    die_offset: int                    # .debug_info byte offset within binary
+    name: str | None = Field(default=None, max_length=256)
+
+    __table_args__ = (
+        UniqueConstraint("binary_id", "die_offset"),
+        Index("ix_dwarfsubprogram_binary", "binary_id"),
+    )
+
+    variables: list["DwarfVariable"] = Relationship(back_populates="subprogram")
+
+
+class DwarfVariable(SQLModel, table=True):
+    """
+    DW_TAG_variable or DW_TAG_formal_parameter from DWARF debug info.
+
+    Stores the variable name, its type (via canonical_dwarf_type), and its
+    stack location (DW_AT_location). Location is expressed as a frame-base
+    offset (DW_OP_fbreg) or a register name (DW_OP_reg*), or "complex" for
+    multi-operation expressions we don't decode.
+
+    location_fbreg is the signed byte offset from the frame base (CFA/RBP
+    depending on compiler — usually RBP-relative on x86-64 with -O0, or
+    CFA-relative with -O1+).
+
+    Scoped to a binary (die_offset is binary-local).
+    """
+
+    __tablename__ = "dwarfvariable"
+
+    id: int | None = Field(default=None, primary_key=True)
+    binary_id: int = Field(foreign_key="binary.id", index=True)
+    subprogram_id: int | None = Field(
+        default=None, foreign_key="dwarfsubprogram.id", index=True
+    )
+    die_offset: int                    # .debug_info byte offset
+    tag: str = Field(max_length=32)    # "variable" or "formal_parameter"
+    name: str | None = Field(default=None, max_length=256)
+    canonical_type_id: int | None = Field(
+        default=None, foreign_key="canonical_dwarf_type.id"
+    )
+    location_type: str | None = Field(default=None, max_length=16)
+    location_fbreg: int | None = None  # Signed byte offset from frame base
+    location_register: str | None = Field(default=None, max_length=32)
+
+    __table_args__ = (
+        UniqueConstraint("binary_id", "die_offset"),
+        Index("ix_dwarfvariable_binary", "binary_id"),
+        Index("ix_dwarfvariable_subprogram", "subprogram_id"),
+    )
+
+    subprogram: DwarfSubprogram | None = Relationship(back_populates="variables")
+
+
 class SourceFile(SQLModel, table=True):
     """
     Normalized source file path catalog.

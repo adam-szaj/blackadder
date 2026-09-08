@@ -233,6 +233,92 @@ async def flatten(
 # ============================================================================
 
 
+async def get_variables_for_subprogram(
+    manager: "AsyncDatabaseManager",
+    subprogram_name: str,
+    bin_id: int,
+) -> list:
+    """Return DwarfVariable records for a named subprogram in a binary."""
+    from blackadder.models import DwarfSubprogram, DwarfVariable
+    from sqlmodel import select
+
+    async with manager.get_session() as s:
+        sp_result = await s.execute(
+            select(DwarfSubprogram).where(
+                (DwarfSubprogram.binary_id == bin_id)
+                & (DwarfSubprogram.name == subprogram_name)
+            ).limit(1)
+        )
+        sp = sp_result.scalars().first()
+        if sp is None:
+            return []
+        var_result = await s.execute(
+            select(DwarfVariable).where(DwarfVariable.subprogram_id == sp.id)
+        )
+        return list(var_result.scalars().all())
+
+
+async def find_local_var_at_fbreg(
+    manager: "AsyncDatabaseManager",
+    subprogram_name: str,
+    bin_id: int,
+    fbreg_offset: int,
+) -> object | None:
+    """Find a DwarfVariable covering a given frame-base offset.
+
+    Returns the DwarfVariable whose fbreg range covers fbreg_offset, or None.
+    For "fbreg" location types: variable spans [fbreg_offset, fbreg_offset+size).
+    We find the variable with location_fbreg <= fbreg_offset and
+    location_fbreg + type_size > fbreg_offset (if type size known).
+    Falls back to exact match if size is unknown.
+    """
+    from blackadder.models import CanonicalDwarfType, DwarfSubprogram, DwarfVariable
+    from sqlmodel import select
+
+    async with manager.get_session() as s:
+        sp_result = await s.execute(
+            select(DwarfSubprogram).where(
+                (DwarfSubprogram.binary_id == bin_id)
+                & (DwarfSubprogram.name == subprogram_name)
+            ).limit(1)
+        )
+        sp = sp_result.scalars().first()
+        if sp is None:
+            return None
+
+        # All fbreg variables in this subprogram
+        var_result = await s.execute(
+            select(DwarfVariable).where(
+                (DwarfVariable.subprogram_id == sp.id)
+                & (DwarfVariable.location_type == "fbreg")
+            )
+        )
+        vars_ = list(var_result.scalars().all())
+
+    # Match in Python: need type size — fetch canonical types
+    for v in vars_:
+        var_fbreg = v.location_fbreg
+        if var_fbreg is None:
+            continue
+        if v.canonical_type_id is not None:
+            async with manager.get_session() as s:
+                ct_result = await s.execute(
+                    select(CanonicalDwarfType).where(
+                        CanonicalDwarfType.id == v.canonical_type_id
+                    )
+                )
+                ct = ct_result.scalars().first()
+            size = ct.byte_size if ct and ct.byte_size else 1
+        else:
+            size = 1
+        # fbreg is signed, negative = below frame base
+        # Variable spans [var_fbreg, var_fbreg + size)
+        if var_fbreg <= fbreg_offset < var_fbreg + size:
+            return v
+
+    return None
+
+
 async def resolve_and_flatten(
     manager: "AsyncDatabaseManager",
     type_name: str,

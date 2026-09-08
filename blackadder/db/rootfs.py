@@ -52,6 +52,7 @@ class BinaryPayload:
     symbols: list[tuple]      # (address, scope, sym_type, section, size, name)
     dwarf_types: list[tuple]  # (die_offset, tag, name, byte_size, type_ref, encoding)
     dwarf_members: list[tuple]  # (parent_die_offset, name, byte_offset, member_type_ref)
+    dwarf_vars: list[tuple]   # (subprogram_die_offset, die_offset, tag, name, type_ref, loc_type, loc_fbreg, loc_reg)
     debug_lines: list[tuple]  # (source_file, line_number, address)
     load_types: bool
     load_lines: bool
@@ -334,6 +335,7 @@ class RootfsDatabase:
 
         dwarf_types: list[tuple] = []
         dwarf_members: list[tuple] = []
+        dwarf_vars: list[tuple] = []
         debug_lines: list[tuple] = []
 
         # --types implies --lines
@@ -342,7 +344,7 @@ class RootfsDatabase:
         if load_types:
             try:
                 async with parser.subprocess_sem:
-                    dt_raw, dm_raw = await asyncio.to_thread(
+                    dt_raw, dm_raw, dv_raw = await asyncio.to_thread(
                         _sync_parse_dwarf_types, sym_source, self.config.objdump_path
                     )
                 dwarf_types = [
@@ -352,6 +354,12 @@ class RootfsDatabase:
                 dwarf_members = [
                     (m["parent_die_offset"], m.get("name"), m["byte_offset"], m["member_type_ref"])
                     for m in dm_raw
+                ]
+                dwarf_vars = [
+                    (v["subprogram_die_offset"], v["die_offset"], v["tag"],
+                     v.get("name"), v.get("type_ref"),
+                     v.get("location_type"), v.get("location_fbreg"), v.get("location_register"))
+                    for v in dv_raw
                 ]
             except Exception as e:
                 logger.debug("dwarf_collect_failed", extra={"binary": binary_path, "error": str(e)})
@@ -381,6 +389,7 @@ class RootfsDatabase:
             symbols=syms_data,
             dwarf_types=dwarf_types,
             dwarf_members=dwarf_members,
+            dwarf_vars=dwarf_vars,
             debug_lines=debug_lines,
             load_types=load_types,
             load_lines=effective_lines,
@@ -501,6 +510,8 @@ class RootfsDatabase:
 
         written_types = written_members = written_lines = 0
 
+        die_to_canonical: dict[int, int] = {}
+
         if payload.load_types and payload.dwarf_types:
             # Skip if already loaded for this binary
             ref_check = await conn.execute(
@@ -550,13 +561,15 @@ class RootfsDatabase:
                 )
                 written_types = len(ref_rows)
 
+                # Build die_offset→canonical_id map (used by members and variables)
+                die_to_canonical = {
+                    t[0]: canon_map[(t[1], t[2], t[3], t[5])]
+                    for t in payload.dwarf_types
+                    if t[0] is not None and (t[1], t[2], t[3], t[5]) in canon_map
+                }
+
                 # 4. INSERT dwarfmember — canonical_type_id via in-memory die_offset→canonical_id map
                 if payload.dwarf_members:
-                    die_to_canonical: dict[int, int] = {
-                        t[0]: canon_map[(t[1], t[2], t[3], t[5])]
-                        for t in payload.dwarf_types
-                        if (t[1], t[2], t[3], t[5]) in canon_map
-                    }
                     # dwarf_members tuple: (parent_die_offset, name, byte_offset, member_type_ref)
                     member_rows = [
                         (die_to_canonical[m[0]], m[1], m[2], m[3])
@@ -571,6 +584,52 @@ class RootfsDatabase:
                             member_rows,
                         )
                         written_members = len(member_rows)
+
+                # 5. INSERT dwarfsubprogram + dwarfvariable
+                if payload.dwarf_vars:
+                    # Collect unique subprograms from types (tag="subprogram")
+                    subprog_die_to_id: dict[int, int] = {}
+                    subprog_tuples = [
+                        (binary_id, t[0], t[2])   # (binary_id, die_offset, name)
+                        for t in payload.dwarf_types
+                        if t[1] == "subprogram" and t[0] is not None
+                    ]
+                    if subprog_tuples:
+                        await raw_conn.executemany(
+                            "INSERT OR IGNORE INTO dwarfsubprogram"
+                            " (binary_id, die_offset, name) VALUES (?,?,?)",
+                            subprog_tuples,
+                        )
+                        sp_cursor = await raw_conn.execute(
+                            "SELECT id, die_offset FROM dwarfsubprogram WHERE binary_id=?",
+                            (binary_id,),
+                        )
+                        subprog_die_to_id = {row[1]: row[0] for row in await sp_cursor.fetchall()}
+
+                    # Resolve canonical_type_id for each variable's type_ref
+                    # dwarf_vars tuple: (subprogram_die_offset, die_offset, tag, name,
+                    #                    type_ref, location_type, location_fbreg, location_register)
+                    var_rows = []
+                    for v in payload.dwarf_vars:
+                        (sp_die, v_die, vtag, vname, vtype_ref,
+                         vloc_type, vloc_fbreg, vloc_reg) = v
+                        sp_id = subprog_die_to_id.get(sp_die) if sp_die is not None else None
+                        # Resolve canonical_type_id via die_to_canonical (built above)
+                        canon_type_id: int | None = None
+                        if vtype_ref is not None:
+                            canon_type_id = die_to_canonical.get(vtype_ref)
+                        var_rows.append((
+                            binary_id, sp_id, v_die, vtag, vname,
+                            canon_type_id, vloc_type, vloc_fbreg, vloc_reg,
+                        ))
+                    if var_rows:
+                        await raw_conn.executemany(
+                            "INSERT OR IGNORE INTO dwarfvariable"
+                            " (binary_id, subprogram_id, die_offset, tag, name,"
+                            "  canonical_type_id, location_type, location_fbreg, location_register)"
+                            " VALUES (?,?,?,?,?,?,?,?,?)",
+                            var_rows,
+                        )
 
         if payload.load_lines and payload.debug_lines:
             dl_check = await conn.execute(
@@ -874,7 +933,7 @@ class RootfsDatabase:
             raise ValueError(f"Binary not in DB: {binary_path}. Run 'load' first.")
 
         # Phase 1: parse subprocess I/O outside any lock
-        types, members = await parse_dwarf_types(binary_path, self.config)
+        types, members, _vars = await parse_dwarf_types(binary_path, self.config)
 
         if not types:
             return 0, 0
@@ -1048,7 +1107,7 @@ class RootfsDatabase:
             # Acquire subprocess semaphore before entering the thread so the
             # concurrency cap applies to threads the same way it did to coroutines.
             async with bintool.subprocess_sem:
-                all_types, all_members = await asyncio.to_thread(
+                all_types, all_members, _all_vars = await asyncio.to_thread(
                     _sync_parse_dwarf_types,
                     binary_path,
                     self.config.objdump_path,
