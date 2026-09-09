@@ -5,8 +5,9 @@ Tests binary similarity scoring and matching.
 """
 
 import pytest
-from blackadder.models import Binary, FunctionFingerprint
+
 from blackadder.binutils.matcher import BinaryMatcher
+from blackadder.models import Binary, FunctionFingerprint
 
 
 @pytest.mark.asyncio
@@ -131,7 +132,7 @@ class TestBinaryMatcherFindMatches:
 
     async def test_find_matches_returns_list(self, memory_db):
         """Test that find_matches returns a list."""
-        async with memory_db.manager.get_session() as session:
+        async with memory_db.get_session() as session:
             # Create a binary in DB
             binary = Binary(md5sum="abc123", name="libc.so.6")
             session.add(binary)
@@ -148,7 +149,7 @@ class TestBinaryMatcherFindMatches:
 
     async def test_find_matches_empty_candidates(self, memory_db):
         """Test that empty candidates returns empty list."""
-        async with memory_db.manager.get_session() as session:
+        async with memory_db.get_session() as session:
             target_fps = {"main": "hash1"}
             candidates = []
 
@@ -160,7 +161,7 @@ class TestBinaryMatcherFindMatches:
 
     async def test_find_matches_sorted_by_score(self, memory_db):
         """Test that matches are sorted by score descending."""
-        async with memory_db.manager.get_session() as session:
+        async with memory_db.get_session() as session:
             # Create test binaries
             bin1 = Binary(md5sum="bin1", name="libc.so.6")
             bin2 = Binary(md5sum="bin2", name="libc.so.6.1")
@@ -203,7 +204,7 @@ class TestBinaryMatcherFindMatches:
 
     async def test_find_matches_respects_threshold(self, memory_db):
         """Test that threshold filtering works."""
-        async with memory_db.manager.get_session() as session:
+        async with memory_db.get_session() as session:
             # Create binary
             binary = Binary(md5sum="test", name="test.so")
             session.add(binary)
@@ -238,7 +239,7 @@ class TestBinaryMatcherFindMatches:
 
     async def test_find_matches_return_format(self, memory_db):
         """Test that matches have correct format."""
-        async with memory_db.manager.get_session() as session:
+        async with memory_db.get_session() as session:
             binary = Binary(md5sum="test", name="test.so")
             session.add(binary)
             await session.commit()

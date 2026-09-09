@@ -6,6 +6,7 @@ and memory layout analysis.
 """
 
 from typing import Literal
+
 from blackadder.arch import Architecture
 
 

@@ -5,7 +5,7 @@ Supports structured output for register analysis, memory analysis, and more.
 """
 
 import json
-from typing import Dict, List
+
 from blackadder.register_analyzer import RegisterInterpretation
 
 
@@ -29,7 +29,7 @@ class PlainTextFormatter:
             lines.append(f"  Region:   {interp.region_info}")
 
         if interp.notes:
-            lines.append(f"  Notes:")
+            lines.append("  Notes:")
             for note in interp.notes:
                 lines.append(f"    - {note}")
 
@@ -37,7 +37,7 @@ class PlainTextFormatter:
 
     @staticmethod
     def format_all_registers(
-        interpretations: Dict[str, RegisterInterpretation],
+        interpretations: dict[str, RegisterInterpretation],
     ) -> str:
         """Format all register interpretations."""
         if not interpretations:
@@ -46,7 +46,7 @@ class PlainTextFormatter:
         lines = ["Register Analysis Results", "=" * 50]
 
         # Group by pointer type for better readability
-        by_type: Dict[str, List[str]] = {}
+        by_type: dict[str, list[str]] = {}
         for reg_name, interp in sorted(interpretations.items()):
             ptr_type = interp.pointer_type
             if ptr_type not in by_type:
@@ -57,17 +57,17 @@ class PlainTextFormatter:
             )
 
         # Output by type
-        type_order = ["code", "heap", "stack", "data", "unknown"]
-        for ptr_type in type_order:
-            if ptr_type in by_type:
-                lines.append(f"\n{ptr_type.upper()} Pointers:")
-                lines.extend(by_type[ptr_type])
+        type_order: list[str] = ["code", "heap", "stack", "data", "unknown"]
+        for output_type in type_order:
+            if output_type in by_type:
+                lines.append(f"\n{output_type.upper()} Pointers:")
+                lines.extend(by_type[output_type])
 
         return "\n".join(lines)
 
     @staticmethod
     def format_interesting_registers(
-        interpretations: Dict[str, RegisterInterpretation],
+        interpretations: dict[str, RegisterInterpretation],
     ) -> str:
         """Format interesting registers only (excluding zeros and unknowns)."""
         if not interpretations:
@@ -90,10 +90,7 @@ class PlainTextFormatter:
                 if interp.resolved_symbol
                 else interp.region_info or "(value)"
             )
-            lines.append(
-                f"{reg_name:6} = {interp.raw_value:18} ({interp.pointer_type:6}) "
-                f"{symbol}"
-            )
+            lines.append(f"{reg_name:6} = {interp.raw_value:18} ({interp.pointer_type:6}) {symbol}")
 
         return "\n".join(lines)
 
@@ -109,13 +106,12 @@ class JSONFormatter:
 
     @staticmethod
     def format_all_registers(
-        interpretations: Dict[str, RegisterInterpretation],
+        interpretations: dict[str, RegisterInterpretation],
     ) -> str:
         """Format all register interpretations as JSON."""
         data = {
             "registers": {
-                reg_name: interp.model_dump()
-                for reg_name, interp in interpretations.items()
+                reg_name: interp.model_dump() for reg_name, interp in interpretations.items()
             },
             "summary": {
                 "total": len(interpretations),
@@ -126,7 +122,7 @@ class JSONFormatter:
 
     @staticmethod
     def format_interesting_registers(
-        interpretations: Dict[str, RegisterInterpretation],
+        interpretations: dict[str, RegisterInterpretation],
     ) -> str:
         """Format interesting registers as JSON."""
         interesting = {
@@ -137,8 +133,7 @@ class JSONFormatter:
 
         data = {
             "registers": {
-                reg_name: interp.model_dump()
-                for reg_name, interp in interesting.items()
+                reg_name: interp.model_dump() for reg_name, interp in interesting.items()
             },
             "summary": {
                 "interesting_count": len(interesting),
@@ -148,9 +143,9 @@ class JSONFormatter:
         return json.dumps(data, indent=2)
 
 
-def _count_by_type(interpretations: Dict[str, RegisterInterpretation]) -> Dict[str, int]:
+def _count_by_type(interpretations: dict[str, RegisterInterpretation]) -> dict[str, int]:
     """Count registers by pointer type."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for interp in interpretations.values():
         ptr_type = interp.pointer_type
         counts[ptr_type] = counts.get(ptr_type, 0) + 1
@@ -176,16 +171,14 @@ class OutputFormatter:
             return self.json_formatter.format_register_interpretation(interp)
         return self.plain_formatter.format_register_interpretation(interp)
 
-    def format_all_registers(
-        self, interpretations: Dict[str, RegisterInterpretation]
-    ) -> str:
+    def format_all_registers(self, interpretations: dict[str, RegisterInterpretation]) -> str:
         """Format all register interpretations."""
         if self.json_output:
             return self.json_formatter.format_all_registers(interpretations)
         return self.plain_formatter.format_all_registers(interpretations)
 
     def format_interesting_registers(
-        self, interpretations: Dict[str, RegisterInterpretation]
+        self, interpretations: dict[str, RegisterInterpretation]
     ) -> str:
         """Format interesting registers."""
         if self.json_output:

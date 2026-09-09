@@ -184,13 +184,13 @@ class X86_64Architecture(Architecture):
         """Get x86-64 register normalization patterns for assembly hashing."""
         return {
             # RAX and variants
-            r"%r?[0-9]?[a-d][xl]": "%REG_A",  # rax, eax, ax, al, etc.
+            r"%(?:r|e)?a(?:x|l|h)": "%REG_A",  # rax, eax, ax, al, ah
             # RBX and variants
-            r"%r?[0-9]?[b][xl]": "%REG_B",  # rbx, ebx, bx, bl
+            r"%(?:r|e)?b(?:x|l|h)": "%REG_B",  # rbx, ebx, bx, bl, bh
             # RCX and variants
-            r"%r?[0-9]?[c][xl]": "%REG_C",  # rcx, ecx, cx, cl
+            r"%(?:r|e)?c(?:x|l|h)": "%REG_C",  # rcx, ecx, cx, cl, ch
             # RDX and variants
-            r"%r?[0-9]?[d][xl]": "%REG_D",  # rdx, edx, dx, dl
+            r"%(?:r|e)?d(?:x|l|h)": "%REG_D",  # rdx, edx, dx, dl, dh
             # RSI/RDI
             r"%r?[sd]i": "%REG_IDX",  # rsi, rdi, si, di
             # RBP

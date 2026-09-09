@@ -136,7 +136,7 @@ class BlackadderConfig(BaseSettings):
         description="Max time for database queries (seconds)",
     )
 
-    subprocess_timeout_seconds: int = Field(
+    subprocess_timeout_seconds: float = Field(
         default=10,
         description="Max time for tool execution (objdump, readelf, etc.)",
     )

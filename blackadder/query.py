@@ -15,11 +15,11 @@ Usage:
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 from typing import Any
 
 import polars as pl
 
+from blackadder.models import addr_to_db
 from blackadder.queries import QueryDef, load_query_registry
 
 
@@ -27,7 +27,7 @@ def _db_path(path_or_url: str) -> str:
     """Strip SQLAlchemy URL prefixes and return a plain filesystem path."""
     for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
         if path_or_url.startswith(prefix):
-            return path_or_url[len(prefix):]
+            return path_or_url[len(prefix) :]
     return path_or_url
 
 
@@ -76,9 +76,7 @@ def run_query(
         cursor = conn.execute(sql, params)
         columns = [d[0] for d in cursor.description] if cursor.description else []
         rows = cursor.fetchall()
-        return pl.DataFrame(
-            {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-        )
+        return pl.DataFrame({col: [row[i] for row in rows] for i, col in enumerate(columns)})
     finally:
         conn.close()
 
@@ -117,6 +115,12 @@ class BlackadderQuery:
             KeyError: If query_name is not found in registry
         """
         qdef = self.registry[query_name]
+        for parameter_name in qdef.address_params:
+            if parameter_name not in params:
+                continue
+            value = params[parameter_name]
+            unsigned = int(value, 0) if isinstance(value, str) else int(value)
+            params[parameter_name] = addr_to_db(unsigned)
         return run_query(self._db, qdef.sql, params)
 
     def run_sql(self, sql: str, **params: Any) -> pl.DataFrame:

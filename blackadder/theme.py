@@ -19,15 +19,10 @@ Data types and their semantic meaning:
 
 from __future__ import annotations
 
-import sys
-from dataclasses import dataclass, field
+import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib  # type: ignore[no-redef]
 
 # Valid format values per type
 _VALID_FORMATS = {
@@ -40,20 +35,20 @@ _VALID_FORMATS = {
 @dataclass
 class ColorTheme:
     # Colors (Rich-compatible: hex "#rrggbb" or named "cyan")
-    address: str = "#7aa2f7"      # blue       — hex addresses
-    symbol: str = "#e0af68"       # gold       — function/variable names
-    binary: str = "#bb9af7"       # purple     — binary names, file paths
-    size: str = "#9ece6a"         # green      — byte sizes, counts
-    flags: str = "#f7768e"        # red/pink   — permissions, ELF flags
-    section: str = "#2ac3de"      # cyan       — ELF section names
-    debug: str = "#565f89"        # dim blue   — debug files, source locations
-    meta: str = "#737aa2"         # grey       — IDs, indices, frame numbers
+    address: str = "#7aa2f7"  # blue       — hex addresses
+    symbol: str = "#e0af68"  # gold       — function/variable names
+    binary: str = "#bb9af7"  # purple     — binary names, file paths
+    size: str = "#9ece6a"  # green      — byte sizes, counts
+    flags: str = "#f7768e"  # red/pink   — permissions, ELF flags
+    section: str = "#2ac3de"  # cyan       — ELF section names
+    debug: str = "#565f89"  # dim blue   — debug files, source locations
+    meta: str = "#737aa2"  # grey       — IDs, indices, frame numbers
     description: str = "#a9b1d6"  # light grey — human-readable text
 
     # Formats for numeric types ("hex", "dec", "human")
-    address_format: str = "hex"    # addresses shown as 0xNNNNNNNN
-    offset_format: str = "hex"     # file offsets shown as 0xNNNN
-    size_format: str = "human"     # sizes shown as 4.0 KB / 2.0 MB
+    address_format: str = "hex"  # addresses shown as 0xNNNNNNNN
+    offset_format: str = "hex"  # file offsets shown as 0xNNNN
+    size_format: str = "human"  # sizes shown as 4.0 KB / 2.0 MB
 
 
 # Tokyo Night default (same as field defaults above, explicit for clarity)
@@ -173,9 +168,9 @@ def column_style(col_name: str, theme: ColorTheme) -> str:
 
 def _fmt_human(n: int) -> str:
     """Format an integer as human-readable byte size."""
-    if abs(n) >= 1024 ** 3:
+    if abs(n) >= 1024**3:
         return f"{n / 1024**3:.1f} GB"
-    if abs(n) >= 1024 ** 2:
+    if abs(n) >= 1024**2:
         return f"{n / 1024**2:.1f} MB"
     if abs(n) >= 1024:
         return f"{n / 1024:.1f} KB"

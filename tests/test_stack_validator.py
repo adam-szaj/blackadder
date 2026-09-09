@@ -4,12 +4,13 @@ Tests stack validator across common corruption patterns.
 """
 
 import pytest
-from blackadder.stack_validator import (
-    StackValidator,
-    StackFrame,
-    FrameCorruptionType,
-)
+
 from blackadder.arch import X86_64Architecture
+from blackadder.stack_validator import (
+    FrameCorruptionType,
+    StackFrame,
+    StackValidator,
+)
 
 
 @pytest.fixture
@@ -24,25 +25,25 @@ def sample_frames():
     return [
         StackFrame(
             frame_num=0,
-            frame_pointer=0x7ffffffff0,
-            return_address=0x400a2c,
-            saved_rbp=0x7ffffffff0,
+            frame_pointer=0x7FFFFFFFF0,
+            return_address=0x400A2C,
+            saved_rbp=0x7FFFFFFFF0,
             is_valid=True,
             size=64,
         ),
         StackFrame(
             frame_num=1,
-            frame_pointer=0x7fffffe0,
-            return_address=0x400a3c,
-            saved_rbp=0x7ffffffff0,
+            frame_pointer=0x7FFFFFE0,
+            return_address=0x400A3C,
+            saved_rbp=0x7FFFFFFFF0,
             is_valid=True,
             size=128,
         ),
         StackFrame(
             frame_num=2,
-            frame_pointer=0x7ffffd0,
-            return_address=0x7ffff7e1c5c0,  # libc
-            saved_rbp=0x7fffffe0,
+            frame_pointer=0x7FFFFD0,
+            return_address=0x7FFFF7E1C5C0,  # libc
+            saved_rbp=0x7FFFFFE0,
             is_valid=True,
             size=256,
         ),
@@ -58,7 +59,7 @@ class TestStackValidator:
 
     def test_validate_without_memory(self, validator):
         """Test validation without memory read function."""
-        result = validator.validate_frame_chain(0x7ffffffff0, 0x400a2c)
+        result = validator.validate_frame_chain(0x7FFFFFFFF0, 0x400A2C)
 
         assert result.total_frames == 0
         assert result.valid_frames == 0
@@ -72,14 +73,14 @@ class TestFrameAlignment:
     def test_aligned_frame_pointer(self, validator):
         """Test properly aligned frame pointer."""
         # Aligned to 16 bytes
-        is_aligned = validator.check_frame_alignment(0x7ffffffff0)
+        is_aligned = validator.check_frame_alignment(0x7FFFFFFFF0)
 
         assert is_aligned
 
     def test_unaligned_frame_pointer(self, validator):
         """Test misaligned frame pointer."""
         # Not aligned to 16 bytes
-        is_aligned = validator.check_frame_alignment(0x7ffffffff1)
+        is_aligned = validator.check_frame_alignment(0x7FFFFFFFF1)
 
         assert not is_aligned
 
@@ -96,9 +97,9 @@ class TestPointerValidity:
     def test_valid_pointer(self, validator):
         """Test pointer within valid stack range."""
         is_valid = validator.check_pointer_validity(
-            frame_pointer=0x7ffffffff0,
-            stack_start=0x7ffff0000,
-            stack_end=0x7ffffffff000,
+            frame_pointer=0x7FFFFFFFF0,
+            stack_start=0x7FFFF0000,
+            stack_end=0x7FFFFFFFF000,
         )
 
         assert is_valid
@@ -106,9 +107,9 @@ class TestPointerValidity:
     def test_pointer_below_range(self, validator):
         """Test pointer below stack range."""
         is_valid = validator.check_pointer_validity(
-            frame_pointer=0x7ffff0,
-            stack_start=0x7ffff0000,
-            stack_end=0x7ffffffff000,
+            frame_pointer=0x7FFFF0,
+            stack_start=0x7FFFF0000,
+            stack_end=0x7FFFFFFFF000,
         )
 
         assert not is_valid
@@ -116,9 +117,9 @@ class TestPointerValidity:
     def test_pointer_above_range(self, validator):
         """Test pointer above stack range."""
         is_valid = validator.check_pointer_validity(
-            frame_pointer=0xffffffffffffffff,  # Maximum value
-            stack_start=0x7ffff0000,
-            stack_end=0x7ffffffff000,
+            frame_pointer=0xFFFFFFFFFFFFFFFF,  # Maximum value
+            stack_start=0x7FFFF0000,
+            stack_end=0x7FFFFFFFF000,
         )
 
         assert not is_valid
@@ -126,9 +127,9 @@ class TestPointerValidity:
     def test_pointer_at_boundary(self, validator):
         """Test pointer at stack range boundary."""
         is_valid = validator.check_pointer_validity(
-            frame_pointer=0x7ffff0000,  # At start
-            stack_start=0x7ffff0000,
-            stack_end=0x7ffffffff000,
+            frame_pointer=0x7FFFF0000,  # At start
+            stack_start=0x7FFFF0000,
+            stack_end=0x7FFFFFFFF000,
         )
 
         assert is_valid
@@ -148,19 +149,19 @@ class TestFrameLoopDetection:
         frames = [
             StackFrame(
                 frame_num=0,
-                frame_pointer=0x7ffffffff0,
+                frame_pointer=0x7FFFFFFFF0,
                 is_valid=True,
                 size=64,
             ),
             StackFrame(
                 frame_num=1,
-                frame_pointer=0x7fffffe0,
+                frame_pointer=0x7FFFFFE0,
                 is_valid=True,
                 size=128,
             ),
             StackFrame(
                 frame_num=2,
-                frame_pointer=0x7ffffffff0,  # Loop back to frame 0
+                frame_pointer=0x7FFFFFFFF0,  # Loop back to frame 0
                 is_valid=True,
                 size=256,
             ),
@@ -188,7 +189,7 @@ class TestBufferOverflowDetection:
         frames = [
             StackFrame(
                 frame_num=0,
-                frame_pointer=0x7ffffffff0,
+                frame_pointer=0x7FFFFFFFF0,
                 size=(2 * 1024 * 1024),  # 2MB frame
                 is_valid=False,
             ),
@@ -204,7 +205,7 @@ class TestBufferOverflowDetection:
         frames = [
             StackFrame(
                 frame_num=0,
-                frame_pointer=0x7ffffffff0,
+                frame_pointer=0x7FFFFFFFF0,
                 size=256 * 1024,  # 256KB frame
                 is_valid=True,
             ),
@@ -224,8 +225,8 @@ class TestReturnAddressValidation:
         frames = [
             StackFrame(
                 frame_num=0,
-                frame_pointer=0x7ffffffff0,
-                return_address=0x400a2c,
+                frame_pointer=0x7FFFFFFFF0,
+                return_address=0x400A2C,
                 is_valid=True,
                 size=64,
             ),
@@ -242,14 +243,14 @@ class TestReturnAddressValidation:
         frames = [
             StackFrame(
                 frame_num=0,
-                frame_pointer=0x7ffffffff0,
-                return_address=0xdeadbeef,  # Not in any code region
+                frame_pointer=0x7FFFFFFFF0,
+                return_address=0xDEADBEEF,  # Not in any code region
                 is_valid=False,
                 size=64,
             ),
         ]
 
-        code_regions = [(0x400000, 0x401000), (0x7ffff7e00000, 0x7ffff7e1c000)]
+        code_regions = [(0x400000, 0x401000), (0x7FFFF7E00000, 0x7FFFF7E1C000)]
 
         issues = validator.validate_return_addresses(frames, code_regions)
 
@@ -261,14 +262,14 @@ class TestReturnAddressValidation:
         frames = [
             StackFrame(
                 frame_num=0,
-                frame_pointer=0x7ffffffff0,
-                return_address=0x7ffff7e1c5c0,  # In libc
+                frame_pointer=0x7FFFFFFFF0,
+                return_address=0x7FFFF7E1C5C0,  # In libc
                 is_valid=True,
                 size=64,
             ),
         ]
 
-        code_regions = [(0x400000, 0x401000), (0x7ffff7e00000, 0x7ffff7e1c000)]
+        code_regions = [(0x400000, 0x401000), (0x7FFFF7E00000, 0x7FFFF7E1C000)]
 
         issues = validator.validate_return_addresses(frames, code_regions)
 
@@ -285,7 +286,7 @@ class TestFrameWithoutReturnAddress:
         frames = [
             StackFrame(
                 frame_num=0,
-                frame_pointer=0x7ffffffff0,
+                frame_pointer=0x7FFFFFFFF0,
                 return_address=None,  # No return address
                 is_valid=True,
                 size=64,

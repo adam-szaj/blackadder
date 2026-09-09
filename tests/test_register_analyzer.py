@@ -5,15 +5,15 @@ Tests RegisterAnalyzer with mock process state across multiple architectures
 """
 
 import pytest
-from blackadder.register_analyzer import RegisterAnalyzer, RegisterInterpretation
+
 from blackadder.arch import (
-    get_architecture,
-    X86_64Architecture,
     ARM64Architecture,
     ARMArchitecture,
+    X86_64Architecture,
 )
-from blackadder.models import ProcessSnapshot, MemoryMapping
-from tests.fixtures.phase3_data import MOCK_PROCESSES, MOCK_MEMORY_MAPPINGS, MOCK_REGISTER_STATES
+from blackadder.models import MemoryMapping, ProcessSnapshot
+from blackadder.register_analyzer import RegisterAnalyzer, RegisterInterpretation
+from tests.fixtures.phase3_data import MOCK_MEMORY_MAPPINGS, MOCK_PROCESSES, MOCK_REGISTER_STATES
 
 
 class TestRegisterAnalyzerX86_64:
@@ -35,11 +35,11 @@ class TestRegisterAnalyzerX86_64:
     def x86_64_symbols(self) -> dict[int, str]:
         """Get x86-64 symbol table."""
         return {
-            0x400a1c: "main",
-            0x400a25: "process_data",
-            0x400a2c: "calculate_sum",
-            0x400b00: "malloc_wrapper",
-            0x7ffff7e00000: "__libc_start_main",
+            0x400A1C: "main",
+            0x400A25: "process_data",
+            0x400A2C: "calculate_sum",
+            0x400B00: "malloc_wrapper",
+            0x7FFFF7E00000: "__libc_start_main",
         }
 
     @pytest.fixture
@@ -54,7 +54,7 @@ class TestRegisterAnalyzerX86_64:
     def test_code_pointer_with_symbol(self, analyzer):
         """Test code pointer that resolves to known symbol."""
         # RIP at main
-        result = analyzer.interpret_register("rip", 0x400a1c)
+        result = analyzer.interpret_register("rip", 0x400A1C)
 
         assert result.pointer_type == "code"
         assert result.resolved_symbol == "main"
@@ -82,21 +82,21 @@ class TestRegisterAnalyzerX86_64:
     def test_stack_pointer(self, analyzer):
         """Test stack pointer detection."""
         # RBP pointing to stack (high address, above libc)
-        result = analyzer.interpret_register("rbp", 0x7ffff7f00100)
+        result = analyzer.interpret_register("rbp", 0x7FFFF7F00100)
 
         assert result.pointer_type == "stack"
         assert result.confidence > 0.85
 
     def test_library_pointer(self, analyzer):
         """Test pointer to library code."""
-        result = analyzer.interpret_register("rax", 0x7ffff7e00000)
+        result = analyzer.interpret_register("rax", 0x7FFFF7E00000)
 
         assert result.pointer_type == "code"
         assert result.confidence > 0.60
 
     def test_unknown_pointer(self, analyzer):
         """Test unmapped address."""
-        result = analyzer.interpret_register("rax", 0xdeadbeef)
+        result = analyzer.interpret_register("rax", 0xDEADBEEF)
 
         assert result.pointer_type == "unknown"
         assert result.confidence < 0.5
@@ -148,11 +148,11 @@ class TestRegisterAnalyzerARM64:
     def arm64_symbols(self) -> dict[int, str]:
         """Get ARM64 symbol table."""
         return {
-            0x400a1c: "main",
-            0x400a25: "process_data",
-            0x400a2c: "calculate_sum",
-            0x400b00: "malloc_wrapper",
-            0x7ffff7e00000: "__libc_start_main",
+            0x400A1C: "main",
+            0x400A25: "process_data",
+            0x400A2C: "calculate_sum",
+            0x400B00: "malloc_wrapper",
+            0x7FFFF7E00000: "__libc_start_main",
         }
 
     @pytest.fixture
@@ -166,14 +166,14 @@ class TestRegisterAnalyzerARM64:
 
     def test_pc_code_pointer(self, analyzer):
         """Test ARM64 PC (program counter) at code address."""
-        result = analyzer.interpret_register("pc", 0x400a1c)
+        result = analyzer.interpret_register("pc", 0x400A1C)
 
         assert result.pointer_type == "code"
         assert result.confidence > 0.85
 
     def test_lr_link_register(self, analyzer):
         """Test ARM64 LR (link register) at return address."""
-        result = analyzer.interpret_register("lr", 0x400a2c)
+        result = analyzer.interpret_register("lr", 0x400A2C)
 
         assert result.pointer_type == "code"
         assert result.confidence > 0.70
@@ -188,7 +188,7 @@ class TestRegisterAnalyzerARM64:
 
     def test_stack_pointer_arm64(self, analyzer):
         """Test ARM64 stack pointer."""
-        result = analyzer.interpret_register("sp", 0xffffffffffd00)
+        result = analyzer.interpret_register("sp", 0xFFFFFFFFFFD00)
 
         assert result.pointer_type == "stack"
         assert result.confidence > 0.80
@@ -224,9 +224,9 @@ class TestRegisterAnalyzerARM32:
     def arm_symbols(self) -> dict[int, str]:
         """Get ARM symbol table."""
         return {
-            0x400a1c: "main",
-            0x400a25: "process_data",
-            0x400b00: "malloc_wrapper",
+            0x400A1C: "main",
+            0x400A25: "process_data",
+            0x400B00: "malloc_wrapper",
         }
 
     @pytest.fixture
@@ -240,14 +240,14 @@ class TestRegisterAnalyzerARM32:
 
     def test_pc_code_pointer_arm(self, analyzer):
         """Test ARM 32-bit PC at code address."""
-        result = analyzer.interpret_register("pc", 0x400a1c)
+        result = analyzer.interpret_register("pc", 0x400A1C)
 
         assert result.pointer_type == "code"
         assert result.confidence > 0.85
 
     def test_lr_link_register_arm(self, analyzer):
         """Test ARM 32-bit LR (link register)."""
-        result = analyzer.interpret_register("lr", 0x400a25)
+        result = analyzer.interpret_register("lr", 0x400A25)
 
         assert result.pointer_type == "code"
         assert result.confidence > 0.70
@@ -262,7 +262,7 @@ class TestRegisterAnalyzerARM32:
 
     def test_stack_pointer_arm(self, analyzer):
         """Test ARM 32-bit SP (stack pointer)."""
-        result = analyzer.interpret_register("sp", 0xbef00000)
+        result = analyzer.interpret_register("sp", 0xBEF00000)
 
         assert result.pointer_type == "stack"
         assert result.confidence > 0.80
@@ -374,7 +374,7 @@ class TestRegisterAnalyzerEdgeCases:
 
     def test_very_large_address(self, analyzer):
         """Test address in kernel space."""
-        result = analyzer.interpret_register("rax", 0xffffffffffffffff)
+        result = analyzer.interpret_register("rax", 0xFFFFFFFFFFFFFFFF)
 
         assert result.pointer_type == "unknown"
 
@@ -387,8 +387,8 @@ class TestRegisterAnalyzerEdgeCases:
     def test_case_insensitive_register_names(self, analyzer):
         """Test that register names are case-insensitive."""
         # Setup with a test mapping
-        result1 = analyzer.interpret_register("RIP", 0x400a1c)
-        result2 = analyzer.interpret_register("rip", 0x400a1c)
+        result1 = analyzer.interpret_register("RIP", 0x400A1C)
+        result2 = analyzer.interpret_register("rip", 0x400A1C)
 
         assert result1.register_name == "RIP"
         assert result2.register_name == "rip"

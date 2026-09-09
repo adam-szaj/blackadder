@@ -9,14 +9,10 @@ Tests the three evidence tiers:
 Also tests edge cases: single blocked thread, no blocked threads, mixed evidence.
 """
 
-import pytest
 from blackadder.deadlock_analyzer import (
     DeadlockAnalyzer,
-    DeadlockCycle,
     DeadlockReport,
-    DeadlockThread,
 )
-
 
 # ============================================================================
 # Helpers
@@ -97,8 +93,8 @@ class TestFutexSyscall:
 
     def test_two_thread_deadlock_certain(self):
         """Classic A→B, B→A deadlock with futex addresses."""
-        addr_a = 0x7f001000  # mutex held by B, waited by A
-        addr_b = 0x7f002000  # mutex held by A, waited by B
+        addr_a = 0x7F001000  # mutex held by B, waited by A
+        addr_b = 0x7F002000  # mutex held by A, waited by B
 
         threads = [
             _thread(100, name="worker-1", syscall=self._futex_syscall(addr_a)),
@@ -114,7 +110,7 @@ class TestFutexSyscall:
 
     def test_three_thread_deadlock_certain(self):
         """A→B→C→A ring deadlock."""
-        addr_a, addr_b, addr_c = 0x7f001000, 0x7f002000, 0x7f003000
+        addr_a, addr_b, addr_c = 0x7F001000, 0x7F002000, 0x7F003000
 
         threads = [
             _thread(100, syscall=self._futex_syscall(addr_a)),
@@ -130,8 +126,8 @@ class TestFutexSyscall:
     def test_futex_wait_op_0(self):
         """FUTEX_WAIT (op=0) is detected."""
         threads = [
-            _thread(100, syscall=self._futex_syscall(0x7f001000, op=0)),
-            _thread(101, syscall=self._futex_syscall(0x7f002000, op=0)),
+            _thread(100, syscall=self._futex_syscall(0x7F001000, op=0)),
+            _thread(101, syscall=self._futex_syscall(0x7F002000, op=0)),
         ]
         report = _analyze(threads)
         assert report.evidence_level == "certain"
@@ -139,8 +135,8 @@ class TestFutexSyscall:
     def test_futex_wait_private_op_128(self):
         """FUTEX_WAIT_PRIVATE (op=128) is detected."""
         threads = [
-            _thread(100, syscall=self._futex_syscall(0x7f001000, op=128)),
-            _thread(101, syscall=self._futex_syscall(0x7f002000, op=128)),
+            _thread(100, syscall=self._futex_syscall(0x7F001000, op=128)),
+            _thread(101, syscall=self._futex_syscall(0x7F002000, op=128)),
         ]
         report = _analyze(threads)
         assert report.evidence_level == "certain"
@@ -148,8 +144,8 @@ class TestFutexSyscall:
     def test_futex_wake_op_not_detected(self):
         """FUTEX_WAKE (op=1) should NOT be classified as blocked."""
         threads = [
-            _thread(100, syscall=self._futex_syscall(0x7f001000, op=1)),
-            _thread(101, syscall=self._futex_syscall(0x7f002000, op=1)),
+            _thread(100, syscall=self._futex_syscall(0x7F001000, op=1)),
+            _thread(101, syscall=self._futex_syscall(0x7F002000, op=1)),
         ]
         report = _analyze(threads)
         # FUTEX_WAKE means thread is waking others, not blocked
@@ -176,7 +172,7 @@ class TestFutexSyscall:
     def test_single_blocked_thread_no_cycle(self):
         """One blocked thread → suspected, no confirmed cycle."""
         threads = [
-            _thread(100, syscall=self._futex_syscall(0x7f001000)),
+            _thread(100, syscall=self._futex_syscall(0x7F001000)),
         ]
         report = _analyze(threads)
         # Only 1 thread — can't form a deadlock cycle
@@ -184,7 +180,7 @@ class TestFutexSyscall:
 
     def test_contention_same_address_not_deadlock(self):
         """Multiple threads waiting on THE SAME address = contention, not deadlock."""
-        addr = 0x7f001000
+        addr = 0x7F001000
         threads = [
             _thread(100, syscall=self._futex_syscall(addr)),
             _thread(101, syscall=self._futex_syscall(addr)),
@@ -194,7 +190,9 @@ class TestFutexSyscall:
         # All waiting on same address → one holds it, others wait → not a cycle
         # They are suspected but evidence_level should not be "certain" for a cycle
         # (no confirmed cycle since addresses repeat)
-        assert not any(len(c.tids) == 3 for c in report.cycles) or report.evidence_level != "certain"
+        assert (
+            not any(len(c.tids) == 3 for c in report.cycles) or report.evidence_level != "certain"
+        )
 
 
 # ============================================================================
@@ -340,8 +338,12 @@ class TestMixedEvidence:
         """Cycle evidence = weakest evidence among participating threads."""
         # Thread 100: futex syscall (certain), Thread 101: backtrace (probable)
         threads = [
-            _thread(100, thread_id=1, syscall="202 0x7f001000 0x0 0x0 0x0 0x0 0x0 0x7fff000 0x400a1c"),
-            _thread(101, thread_id=2, syscall="202 0x7f002000 0x0 0x0 0x0 0x0 0x0 0x7fff000 0x400a1c"),
+            _thread(
+                100, thread_id=1, syscall="202 0x7f001000 0x0 0x0 0x0 0x0 0x0 0x7fff000 0x400a1c"
+            ),
+            _thread(
+                101, thread_id=2, syscall="202 0x7f002000 0x0 0x0 0x0 0x0 0x0 0x7fff000 0x400a1c"
+            ),
         ]
         backtraces = {2: ["pthread_mutex_lock"]}
         # Both have futex syscall so both certain (backtrace checked only if syscall fails)
@@ -384,12 +386,7 @@ class TestMixedEvidence:
         report = _analyze(threads)
         # Names appear somewhere in description or suspected_threads
         all_names = {dt.name for dt in report.suspected_threads}
-        all_names |= {
-            name
-            for c in report.cycles
-            for name in (c.description,)
-            if c.description
-        }
+        all_names |= {name for c in report.cycles for name in (c.description,) if c.description}
         # At least the cycle/suspected captures our TIDs
         all_tids = {dt.tid for dt in report.suspected_threads}
         all_tids |= {tid for c in report.cycles for tid in c.tids}

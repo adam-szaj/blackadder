@@ -7,18 +7,17 @@ for testing the complete blackadder stack.
 
 import asyncio
 import tempfile
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 
 from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
-from blackadder.models import SQLModel
 from tests.fixtures.phase3_data import (
-    MOCK_PROCESSES,
     MOCK_MEMORY_MAPPINGS,
+    MOCK_PROCESSES,
     MOCK_REGISTER_STATES,
 )
 
@@ -44,8 +43,7 @@ def event_loop():
 def test_config() -> BlackadderConfig:
     """Get test configuration with sensible defaults."""
     return BlackadderConfig(
-        rootfs_db="sqlite+aiosqlite:///:memory:",
-        process_db="sqlite+aiosqlite:///:memory:",
+        db="sqlite+aiosqlite:///:memory:",
         max_subprocess_workers=4,  # Limit for testing
         max_symbol_cache_size=1000,
     )
@@ -69,7 +67,7 @@ async def memory_db(test_config) -> AsyncGenerator[AsyncDatabaseManager, None]:
 
     Automatically creates all tables and cleans up after test.
     """
-    manager = AsyncDatabaseManager(test_config.rootfs_db)
+    manager = AsyncDatabaseManager(test_config.db)
     await manager.create_all()
 
     yield manager
@@ -83,7 +81,7 @@ async def process_db(test_config) -> AsyncGenerator[ProcessDatabase, None]:
     """
     Create in-memory process database for testing.
     """
-    manager = AsyncDatabaseManager(test_config.process_db)
+    manager = AsyncDatabaseManager(test_config.db)
     await manager.create_all()
 
     db = ProcessDatabase(manager, test_config)
@@ -103,16 +101,14 @@ async def temp_databases(test_config) -> tuple[AsyncDatabaseManager, ProcessData
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 
-        rootfs_db = f"sqlite+aiosqlite:///{tmpdir_path / 'rootfs.db'}"
-        process_db = f"sqlite+aiosqlite:///{tmpdir_path / 'process.db'}"
+        database_url = f"sqlite+aiosqlite:///{tmpdir_path / 'blackadder.db'}"
 
         config = BlackadderConfig(
-            rootfs_db=rootfs_db,
-            process_db=process_db,
+            db=database_url,
             max_subprocess_workers=4,
         )
 
-        manager = AsyncDatabaseManager(config.process_db)
+        manager = AsyncDatabaseManager(config.db)
         await manager.create_all()
 
         db = ProcessDatabase(manager, config)
@@ -133,9 +129,9 @@ def sample_maps_content() -> str:
     return """555555554000-555555575000 r-xp 00000000 08:01 12345678  /home/user/myapp
 555555775000-555555776000 r--p 00020000 08:01 12345678  /home/user/myapp
 555555776000-555555777000 rw-p 00021000 08:01 12345678  /home/user/myapp
-7ffff7c00000-7ffff7c28000 r-xp 00000000 08:01 87654321  /lib64/ld-linux-x86-64.so.2
-7ffff7e00000-7ffff7e1c000 r-xp 00000000 08:01 11111111  /lib/x86_64-linux-gnu/libc.so.6
-7ffff7e1c000-7ffff7e7e000 rw-p 0001c000 08:01 11111111  /lib/x86_64-linux-gnu/libc.so.6
+7ffff7c00000-7ffff7c28000 r-xp 00000000 08:01 87654321  /__blackadder_missing__/lib64/ld-linux-x86-64.so.2
+7ffff7e00000-7ffff7e1c000 r-xp 00000000 08:01 11111111  /__blackadder_missing__/lib/libc.so.6
+7ffff7e1c000-7ffff7e7e000 rw-p 0001c000 08:01 11111111  /__blackadder_missing__/lib/libc.so.6
 7ffff7fdd000-7ffff7ffe000 rw-p 00000000 00:00 0         [vvar]
 7ffff7ffe000-7ffff8000000 r-xp 00000000 00:00 0         [vdso]
 ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0 [vsyscall]

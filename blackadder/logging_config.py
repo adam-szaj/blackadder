@@ -10,9 +10,9 @@ from pathlib import Path
 
 # Fields present on every LogRecord — never treat these as "extra"
 _STANDARD_LOG_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
-    "message",      # added by Formatter.format() itself
-    "asctime",      # added by Formatter.formatTime()
-    "taskName",     # added in Python 3.12+
+    "message",  # added by Formatter.format() itself
+    "asctime",  # added by Formatter.formatTime()
+    "taskName",  # added in Python 3.12+
 }
 
 

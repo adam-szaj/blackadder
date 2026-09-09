@@ -15,7 +15,6 @@ from blackadder.binutils.dwarf_parser import (
     parse_dwarf_types_from_text,
 )
 
-
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -155,17 +154,17 @@ MINIMAL_ANON_MEMBER = """\
 
 class TestBaseTypes:
     def test_int_parsed(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_BASE_TYPES)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_BASE_TYPES)
         by_name = _types_by_name(types)
         assert "int" in by_name
         t = by_name["int"]
         assert t["tag"] == "base_type"
         assert t["byte_size"] == 4
         assert t["encoding"] == "signed"
-        assert t["die_offset"] == 0xa4
+        assert t["die_offset"] == 0xA4
 
     def test_unsigned_char_parsed(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_BASE_TYPES)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_BASE_TYPES)
         by_name = _types_by_name(types)
         assert "unsigned char" in by_name
         t = by_name["unsigned char"]
@@ -173,7 +172,7 @@ class TestBaseTypes:
         assert t["encoding"] == "unsigned_char"
 
     def test_no_members_for_base_types(self):
-        _, members = parse_dwarf_types_from_text(MINIMAL_BASE_TYPES)
+        _, members, _ = parse_dwarf_types_from_text(MINIMAL_BASE_TYPES)
         assert members == []
 
 
@@ -184,18 +183,18 @@ class TestBaseTypes:
 
 class TestTypedef:
     def test_typedef_name_and_ref(self):
-        types, _ = parse_dwarf_types_from_text(MINIMAL_TYPEDEF)
+        types, _, _ = parse_dwarf_types_from_text(MINIMAL_TYPEDEF)
         by_name = _types_by_name(types)
         assert "size_t" in by_name
         t = by_name["size_t"]
         assert t["tag"] == "typedef"
-        assert t["type_ref"] == 0xac
+        assert t["type_ref"] == 0xAC
         assert t["byte_size"] is None  # typedef has no byte_size
 
     def test_typedef_die_offset(self):
-        types, _ = parse_dwarf_types_from_text(MINIMAL_TYPEDEF)
+        types, _, _ = parse_dwarf_types_from_text(MINIMAL_TYPEDEF)
         by_name = _types_by_name(types)
-        assert by_name["size_t"]["die_offset"] == 0x1a4
+        assert by_name["size_t"]["die_offset"] == 0x1A4
 
 
 # ============================================================================
@@ -205,30 +204,30 @@ class TestTypedef:
 
 class TestStruct:
     def test_struct_parsed(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_STRUCT)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_STRUCT)
         by_name = _types_by_name(types)
         assert "__pthread_mutex_s" in by_name
         s = by_name["__pthread_mutex_s"]
         assert s["tag"] == "structure_type"
         assert s["byte_size"] == 40
-        assert s["die_offset"] == 0x2f6
+        assert s["die_offset"] == 0x2F6
 
     def test_struct_member_count(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_STRUCT)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_STRUCT)
         by_name = _types_by_name(types)
         struct_offset = by_name["__pthread_mutex_s"]["die_offset"]
         struct_members = _members_for(members, struct_offset)
         assert len(struct_members) == 3
 
     def test_struct_member_names_and_offsets(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_STRUCT)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_STRUCT)
         by_name = _types_by_name(types)
         struct_offset = by_name["__pthread_mutex_s"]["die_offset"]
         struct_members = {m["name"]: m for m in _members_for(members, struct_offset)}
 
         assert "__lock" in struct_members
         assert struct_members["__lock"]["byte_offset"] == 0
-        assert struct_members["__lock"]["member_type_ref"] == 0xa4
+        assert struct_members["__lock"]["member_type_ref"] == 0xA4
 
         assert "__count" in struct_members
         assert struct_members["__count"]["byte_offset"] == 4
@@ -237,12 +236,12 @@ class TestStruct:
         assert struct_members["__owner"]["byte_offset"] == 8
 
     def test_struct_member_type_refs(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_STRUCT)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_STRUCT)
         by_name = _types_by_name(types)
         struct_offset = by_name["__pthread_mutex_s"]["die_offset"]
         struct_members = {m["name"]: m for m in _members_for(members, struct_offset)}
         # __lock → int (0xa4), __count → unsigned int (0x42)
-        assert struct_members["__lock"]["member_type_ref"] == 0xa4
+        assert struct_members["__lock"]["member_type_ref"] == 0xA4
         assert struct_members["__count"]["member_type_ref"] == 0x42
 
 
@@ -253,13 +252,13 @@ class TestStruct:
 
 class TestPointerType:
     def test_pointer_size(self):
-        types, _ = parse_dwarf_types_from_text(MINIMAL_POINTER)
+        types, _, _ = parse_dwarf_types_from_text(MINIMAL_POINTER)
         ptrs = [t for t in types if t["tag"] == "pointer_type"]
         assert len(ptrs) == 1
         assert ptrs[0]["byte_size"] == 8
 
     def test_pointer_type_ref(self):
-        types, _ = parse_dwarf_types_from_text(MINIMAL_POINTER)
+        types, _, _ = parse_dwarf_types_from_text(MINIMAL_POINTER)
         ptrs = [t for t in types if t["tag"] == "pointer_type"]
         assert ptrs[0]["type_ref"] == 0x198  # → char
 
@@ -271,13 +270,13 @@ class TestPointerType:
 
 class TestNestedStruct:
     def test_both_structs_parsed(self):
-        types, _ = parse_dwarf_types_from_text(MINIMAL_NESTED)
+        types, _, _ = parse_dwarf_types_from_text(MINIMAL_NESTED)
         by_name = _types_by_name(types)
         assert "inner" in by_name
         assert "outer" in by_name
 
     def test_inner_members(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_NESTED)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_NESTED)
         by_name = _types_by_name(types)
         inner_offset = by_name["inner"]["die_offset"]
         inner_members = _members_for(members, inner_offset)
@@ -287,7 +286,7 @@ class TestNestedStruct:
         assert offsets["y"] == 4
 
     def test_outer_members(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_NESTED)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_NESTED)
         by_name = _types_by_name(types)
         outer_offset = by_name["outer"]["die_offset"]
         outer_members = _members_for(members, outer_offset)
@@ -304,7 +303,7 @@ class TestNestedStruct:
 
 class TestAnonMember:
     def test_anonymous_member_name_is_none(self):
-        types, members = parse_dwarf_types_from_text(MINIMAL_ANON_MEMBER)
+        types, members, _ = parse_dwarf_types_from_text(MINIMAL_ANON_MEMBER)
         assert len(members) == 1
         assert members[0]["name"] is None
         assert members[0]["byte_offset"] == 0
@@ -327,7 +326,7 @@ def test_real_dump_pthread_mutex_s():
     except FileNotFoundError:
         pytest.skip(f"Dump file not found: {DUMP_PATH}")
 
-    types, members = parse_dwarf_types_from_text(text)
+    types, members, _ = parse_dwarf_types_from_text(text)
     by_name = _types_by_name(types)
 
     assert "__pthread_mutex_s" in by_name, "Expected __pthread_mutex_s in types"
@@ -350,7 +349,7 @@ def test_real_dump_type_count():
     except FileNotFoundError:
         pytest.skip(f"Dump file not found: {DUMP_PATH}")
 
-    types, members = parse_dwarf_types_from_text(text)
+    types, members, _ = parse_dwarf_types_from_text(text)
     assert len(types) > 100, "Expected many types in real binary dump"
     assert len(members) > 50, "Expected many struct members in real binary dump"
 
@@ -401,7 +400,7 @@ class TestDebugLineParser:
     def test_address_parsed_as_int(self):
         records = parse_debug_line_from_text(MINIMAL_DEBUG_LINE)
         assert records[0]["address"] == 0x2437
-        assert records[1]["address"] == 0x243f
+        assert records[1]["address"] == 0x243F
 
     def test_line_number_parsed(self):
         records = parse_debug_line_from_text(MINIMAL_DEBUG_LINE)
@@ -426,8 +425,8 @@ class TestDebugLineParser:
 @pytest.mark.integration
 def test_real_debug_line():
     """Run readelf --debug-dump=decodedline on the real test binary."""
-    import subprocess
     import shutil
+    import subprocess
 
     binary = "tests/gdb-scripts/tests/deadlock_test"
     if not shutil.which("readelf"):
@@ -436,7 +435,9 @@ def test_real_debug_line():
     try:
         result = subprocess.run(
             ["readelf", "--debug-dump=decodedline", binary],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pytest.skip("Could not run readelf on test binary")
@@ -458,15 +459,17 @@ def test_real_debug_line():
 
 class TestEdgeCases:
     def test_empty_input(self):
-        types, members = parse_dwarf_types_from_text("")
+        types, members, variables = parse_dwarf_types_from_text("")
         assert types == []
         assert members == []
+        assert variables == []
 
     def test_no_interesting_tags(self):
         text = "<1><10>: Abbrev Number: 1 (DW_TAG_compile_unit)\n    <11>   DW_AT_name : foo.c\n"
-        types, members = parse_dwarf_types_from_text(text)
+        types, members, variables = parse_dwarf_types_from_text(text)
         assert types == []
         assert members == []
+        assert variables == []
 
     def test_struct_without_name_is_stored(self):
         """Anonymous structs (no DW_AT_name) should still be stored for reference."""
@@ -479,7 +482,7 @@ class TestEdgeCases:
     <29>   DW_AT_data_member_location: 0
  <2><2a>: Abbrev Number: 0
 """
-        types, members = parse_dwarf_types_from_text(text)
+        types, members, _ = parse_dwarf_types_from_text(text)
         structs = [t for t in types if t["tag"] == "structure_type"]
         assert len(structs) == 1
         assert structs[0]["name"] is None

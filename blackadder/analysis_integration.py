@@ -5,17 +5,16 @@ and Stack Validator to provide live memory analysis capabilities.
 """
 
 import logging
-from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
-from blackadder.arch import detect_architecture
+from blackadder.db.base import AsyncDatabaseManager
 from blackadder.heap_analyzer import HeapAnalyzer
 from blackadder.models import ProcessSnapshot
-from blackadder.register_analyzer import RegisterAnalyzer
+from blackadder.register_analyzer import RegisterAnalyzer, RegisterInterpretation
 from blackadder.stack_validator import StackValidator
-from blackadder.db.base import AsyncDatabaseManager
 
 logger = logging.getLogger("blackadder.analysis_integration")
 
@@ -32,9 +31,9 @@ class ProcessMemoryReader:
         """
         self.process = process
         self.session = session
-        self._memory_cache: dict[int, bytes] = {}
+        self._memory_cache: dict[tuple[int, int], bytes] = {}
 
-    async def read_memory(self, address: int, size: int) -> Optional[bytes]:
+    async def read_memory(self, address: int, size: int) -> bytes | None:
         """Read memory from process.
 
         For offline analysis (core dump), extracts from stored segments.
@@ -107,10 +106,27 @@ class AnalysisIntegration:
         self.manager = manager
         self.config = config
 
+    async def _load_process(self, process: ProcessSnapshot) -> ProcessSnapshot:
+        """Return a process whose analyzer relationships are loaded."""
+        if process.id is None:
+            return process
+
+        async with self.manager.get_session() as session:
+            statement = (
+                select(ProcessSnapshot)
+                .where(ProcessSnapshot.id == process.id)
+                .options(
+                    selectinload(ProcessSnapshot.mappings),  # type: ignore[arg-type]
+                    selectinload(ProcessSnapshot.register_states),  # type: ignore[arg-type]
+                )
+            )
+            result = await session.execute(statement)  # type: ignore
+            return result.scalar_one_or_none() or process
+
     async def analyze_registers(
         self,
-        process: Optional[ProcessSnapshot],
-        register_state: Optional[dict] = None,
+        process: ProcessSnapshot | None,
+        register_state: dict | None = None,
         interesting_only: bool = False,
     ) -> dict:
         """Analyze register values from process.
@@ -126,6 +142,7 @@ class AnalysisIntegration:
         if not process:
             # Return empty result if no process
             from blackadder.arch import get_architecture
+
             arch = get_architecture("x86_64")
             return {
                 "process_id": None,
@@ -138,7 +155,10 @@ class AnalysisIntegration:
 
         # Default to x86-64 (would detect from process binaries in Phase 3.2+)
         from blackadder.arch import get_architecture
+
         arch = get_architecture("x86_64")
+
+        process = await self._load_process(process)
 
         logger.debug(
             "analyzing_registers",
@@ -161,7 +181,7 @@ class AnalysisIntegration:
             interpretations = analyzer.interpret_all_registers(register_state)
 
         # Group by pointer type
-        grouped = {}
+        grouped: dict[str, list[tuple[str, RegisterInterpretation]]] = {}
         for reg_name, interp in interpretations.items():
             ptr_type = interp.pointer_type
             if ptr_type not in grouped:
@@ -176,8 +196,7 @@ class AnalysisIntegration:
             "grouped_registers": grouped,
             "grouped_by_type": {
                 ptype: [
-                    {"name": name, "interpretation": interp.model_dump()}
-                    for name, interp in regs
+                    {"name": name, "interpretation": interp.model_dump()} for name, interp in regs
                 ]
                 for ptype, regs in grouped.items()
             },
@@ -185,9 +204,9 @@ class AnalysisIntegration:
 
     async def validate_stack(
         self,
-        process: Optional[ProcessSnapshot],
-        frame_pointer: Optional[int] = None,
-        return_address: Optional[int] = None,
+        process: ProcessSnapshot | None,
+        frame_pointer: int | None = None,
+        return_address: int | None = None,
         max_frames: int = 100,
     ) -> dict:
         """Validate stack frame chain from process.
@@ -203,6 +222,7 @@ class AnalysisIntegration:
         """
         if not process:
             from blackadder.arch import get_architecture
+
             arch = get_architecture("x86_64")
             return {
                 "process_id": None,
@@ -219,6 +239,7 @@ class AnalysisIntegration:
 
         # Default to x86-64 (would detect from process binaries in Phase 3.2+)
         from blackadder.arch import get_architecture
+
         arch = get_architecture("x86_64")
 
         logger.debug(
@@ -231,10 +252,6 @@ class AnalysisIntegration:
         )
 
         validator = StackValidator(arch)
-
-        # Create memory reader (for Phase 3.2+ live memory)
-        async with self.manager.get_session() as session:
-            reader = ProcessMemoryReader(process, session)
 
         # Validate frame chain (stub returns no data without live memory)
         result = validator.validate_frame_chain(
@@ -259,9 +276,9 @@ class AnalysisIntegration:
 
     async def analyze_heap(
         self,
-        process: Optional[ProcessSnapshot],
-        heap_start: Optional[int] = None,
-        heap_end: Optional[int] = None,
+        process: ProcessSnapshot | None,
+        heap_start: int | None = None,
+        heap_end: int | None = None,
     ) -> dict:
         """Analyze heap from process.
 
@@ -291,23 +308,10 @@ class AnalysisIntegration:
             },
         )
 
+        process = await self._load_process(process)
+
         # Auto-detect heap region from mappings
         if heap_start is None or heap_end is None:
-            try:
-                for mapping in process.mappings:
-                    # Look for anonymous heap
-                    if "[heap]" in (mapping.pathname or ""):
-                        if heap_start is None:
-                            heap_start = mapping.start_addr
-                        if heap_end is None:
-                            heap_end = mapping.end_addr
-                        break
-            except Exception as e:
-                logger.warning("heap_mappings_error", extra={"error": str(e)})
-                pass
-
-        if heap_start is None or heap_end is None:
-            # Old code for fallback
             for mapping in process.mappings:
                 # Look for anonymous heap
                 if "[heap]" in (mapping.pathname or ""):
@@ -346,13 +350,11 @@ class AnalysisIntegration:
             "fragmentation": result.fragmentation_ratio,
             "total_allocations": result.total_allocations,
             "anomalies": [anomaly.model_dump() for anomaly in result.anomalies],
-            "high_risk_anomalies": [
-                anomaly.model_dump() for anomaly in result.high_risk_anomalies
-            ],
+            "high_risk_anomalies": [anomaly.model_dump() for anomaly in result.high_risk_anomalies],
             "analysis_notes": result.analysis_notes,
         }
 
-    async def get_process_by_id(self, process_id: int) -> Optional[ProcessSnapshot]:
+    async def get_process_by_id(self, process_id: int) -> ProcessSnapshot | None:
         """Load process from database by ID.
 
         Args:
@@ -362,13 +364,20 @@ class AnalysisIntegration:
             ProcessSnapshot or None if not found
         """
         async with self.manager.get_session() as session:
-            statement = select(ProcessSnapshot).where(ProcessSnapshot.id == process_id)
+            statement = (
+                select(ProcessSnapshot)
+                .where(ProcessSnapshot.id == process_id)
+                .options(
+                    selectinload(ProcessSnapshot.mappings),  # type: ignore[arg-type]
+                    selectinload(ProcessSnapshot.register_states),  # type: ignore[arg-type]
+                )
+            )
             result = await session.execute(statement)  # type: ignore
             return result.scalar_one_or_none()
 
     async def get_process_by_pid(
-        self, pid: int, db_path: Optional[str] = None
-    ) -> Optional[ProcessSnapshot]:
+        self, pid: int, db_path: str | None = None
+    ) -> ProcessSnapshot | None:
         """Load process from database by PID.
 
         Args:
@@ -379,13 +388,18 @@ class AnalysisIntegration:
             ProcessSnapshot or None if not found
         """
         async with self.manager.get_session() as session:
-            statement = select(ProcessSnapshot).where(ProcessSnapshot.pid == pid)
+            statement = (
+                select(ProcessSnapshot)
+                .where(ProcessSnapshot.pid == pid)
+                .options(
+                    selectinload(ProcessSnapshot.mappings),  # type: ignore[arg-type]
+                    selectinload(ProcessSnapshot.register_states),  # type: ignore[arg-type]
+                )
+            )
             result = await session.execute(statement)  # type: ignore
             return result.scalar_one_or_none()
 
-    async def get_register_state(
-        self, process: ProcessSnapshot
-    ) -> Optional[dict]:
+    async def get_register_state(self, process: ProcessSnapshot) -> dict | None:
         """Extract register state from process.
 
         For core dumps, extracts from PT_NOTE section.
@@ -397,9 +411,11 @@ class AnalysisIntegration:
         Returns:
             Dict of {register_name: register_value} or None
         """
+        process = await self._load_process(process)
+
         # Phase 3.2: Extract from ProcessRegisterState if available
         # For now, return empty dict (requires core dump register extraction)
-        if hasattr(process, "register_state") and process.register_state:
+        if process.register_states:
             # Would reconstruct register dict from ProcessRegisterState model
             logger.debug(
                 "register_state_available",

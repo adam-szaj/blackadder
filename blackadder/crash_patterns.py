@@ -9,8 +9,8 @@ async, no DB calls.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
-
 
 # ============================================================================
 # Data classes
@@ -22,7 +22,7 @@ class CrashPattern:
     """A single detected crash pattern."""
 
     name: str
-    confidence: str          # "certain" | "probable" | "possible"
+    confidence: str  # "certain" | "probable" | "possible"
     description: str
     evidence: list[str]
     suggestion: str
@@ -40,24 +40,28 @@ class CrashPatternReport:
 # Free symbols that indicate memory management operations
 # ============================================================================
 
-_FREE_SYMBOLS: frozenset[str] = frozenset({
-    "free",
-    "cfree",
-    "__libc_free",
-    "__GI___libc_free",
-    "tcache_put",
-    "_int_free",
-})
+_FREE_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "free",
+        "cfree",
+        "__libc_free",
+        "__GI___libc_free",
+        "tcache_put",
+        "_int_free",
+    }
+)
 
-_ALLOC_SYMBOLS: frozenset[str] = frozenset({
-    "malloc",
-    "calloc",
-    "realloc",
-    "__libc_malloc",
-    "__GI___libc_malloc",
-    "_int_malloc",
-    "tcache_get",
-})
+_ALLOC_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "malloc",
+        "calloc",
+        "realloc",
+        "__libc_malloc",
+        "__GI___libc_malloc",
+        "_int_malloc",
+        "tcache_get",
+    }
+)
 
 # Instruction pointer register names per arch
 _IP_REGS: tuple[str, ...] = ("rip", "pc", "eip", "ip")
@@ -66,12 +70,11 @@ _SP_REGS: tuple[str, ...] = ("rsp", "sp", "esp")
 # Regex to extract register names used as memory base in asm operands.
 # Matches: (%rdi)  [rdi]  [x0]  (r0)  [rdi+0x8]  0x10(%rbp)  etc.
 # Captures the register name (without %, brackets, or offsets).
-import re as _re
-_RE_MEM_REG = _re.compile(
-    r'(?:'
-    r'\((%\w+)\)'               # AT&T: (%rdi) or offset(%rbp)
-    r'|\[(\w+)(?:[,+][^\]]*)?]' # Intel: [rdi] or [rdi+8] or [x0, #8]
-    r')',
+_RE_MEM_REG = re.compile(
+    r"(?:"
+    r"\((%\w+)\)"  # AT&T: (%rdi) or offset(%rbp)
+    r"|\[(\w+)(?:[,+][^\]]*)?]"  # Intel: [rdi] or [rdi+8] or [x0, #8]
+    r")",
 )
 
 
@@ -145,9 +148,7 @@ class CrashPatternEngine:
                 patterns.append(p)
 
         if patterns:
-            summary = f"{len(patterns)} pattern(s) detected: " + ", ".join(
-                p.name for p in patterns
-            )
+            summary = f"{len(patterns)} pattern(s) detected: " + ", ".join(p.name for p in patterns)
         else:
             summary = "No patterns detected"
 
@@ -166,13 +167,10 @@ class CrashPatternEngine:
         if dl.cycles:
             for c in dl.cycles:
                 evidence.append(
-                    f"Cycle ({c.evidence_level}): "
-                    + " → ".join(str(t) for t in c.tids)
+                    f"Cycle ({c.evidence_level}): " + " → ".join(str(t) for t in c.tids)
                 )
         for t in dl.suspected_threads:
-            evidence.append(
-                f"TID {t.tid} ({t.name or '?'}) blocked — {t.evidence}"
-            )
+            evidence.append(f"TID {t.tid} ({t.name or '?'}) blocked — {t.evidence}")
 
         return CrashPattern(
             name="deadlock",
@@ -180,7 +178,7 @@ class CrashPatternEngine:
             description=dl.summary or f"Deadlock detected ({dl.evidence_level})",
             evidence=evidence,
             suggestion="Use analyse-deadlock for full deadlock graph. "
-                       "Provide --lock-state from find_deadlock.py for exact ownership.",
+            "Provide --lock-state from find_deadlock.py for exact ownership.",
         )
 
     def _detect_stack_overflow(self) -> CrashPattern | None:
@@ -196,7 +194,11 @@ class CrashPatternEngine:
             tid = getattr(thread, "tid", "?")
 
             # Try per-thread registers first, then main (None key)
-            regs = (self._regs_by_thread.get(db_id) if db_id is not None else None) or self._regs_by_thread.get(None) or {}
+            regs = (
+                (self._regs_by_thread.get(db_id) if db_id is not None else None)
+                or self._regs_by_thread.get(None)
+                or {}
+            )
             sp: int | None = None
             for reg in _SP_REGS:
                 if reg in regs:
@@ -209,8 +211,7 @@ class CrashPatternEngine:
             distance = abs(stack_end - sp)
             if distance < 4096:
                 evidence.append(
-                    f"TID {tid}: SP=0x{sp:x} stack_end=0x{stack_end:x} "
-                    f"(distance={distance} bytes)"
+                    f"TID {tid}: SP=0x{sp:x} stack_end=0x{stack_end:x} (distance={distance} bytes)"
                 )
 
         if not evidence:
@@ -222,7 +223,7 @@ class CrashPatternEngine:
             description=f"Stack pointer near stack boundary in {len(evidence)} thread(s)",
             evidence=evidence,
             suggestion="Check for unbounded recursion or large stack allocations. "
-                       "Inspect backtrace for recursive call chains.",
+            "Inspect backtrace for recursive call chains.",
         )
 
     def _detect_null_deref(self) -> CrashPattern | None:
@@ -280,12 +281,25 @@ class CrashPatternEngine:
             # Heuristic 3: fallback — no crash instruction, look for exact-zero regs
             # Only registers that look like general-purpose (exclude SP/IP/flags)
             if not crash_insn and ip is not None and ip >= 0x1000:
-                _skip = set(_IP_REGS) | set(_SP_REGS) | {
-                    "eflags", "flags", "cpsr", "cs", "ss", "ds", "es", "fs", "gs",
-                    "__crash_insn__",
-                }
+                _skip = (
+                    set(_IP_REGS)
+                    | set(_SP_REGS)
+                    | {
+                        "eflags",
+                        "flags",
+                        "cpsr",
+                        "cs",
+                        "ss",
+                        "ds",
+                        "es",
+                        "fs",
+                        "gs",
+                        "__crash_insn__",
+                    }
+                )
                 zero_regs = [
-                    r for r, v in regs.items()
+                    r
+                    for r, v in regs.items()
                     if v == 0 and r not in _skip and not r.startswith("__")
                 ]
                 if zero_regs:
@@ -299,10 +313,7 @@ class CrashPatternEngine:
 
         # Confidence depends on which heuristic fired:
         # h1/h2 → probable (we know what crashed); h3 → possible (guessing)
-        has_certain = any(
-            "null-deref via" in e or "near NULL" in e
-            for e in evidence
-        )
+        has_certain = any("null-deref via" in e or "near NULL" in e for e in evidence)
         confidence = "probable" if has_certain else "possible"
 
         return CrashPattern(
@@ -311,7 +322,7 @@ class CrashPatternEngine:
             description="NULL or near-NULL pointer dereference detected",
             evidence=evidence,
             suggestion="Check all pointer arguments for NULL before dereference. "
-                       "Look for missing NULL checks on return values (malloc, open, etc.).",
+            "Look for missing NULL checks on return values (malloc, open, etc.).",
         )
 
     def _detect_use_after_free(self) -> CrashPattern | None:
@@ -358,7 +369,7 @@ class CrashPatternEngine:
             description=desc,
             evidence=evidence,
             suggestion="Enable AddressSanitizer (-fsanitize=address) to confirm. "
-                       "Check for dangling pointers after free().",
+            "Check for dangling pointers after free().",
         )
 
     def _detect_double_free(self) -> CrashPattern | None:
@@ -370,9 +381,7 @@ class CrashPatternEngine:
             tid = getattr(thread, "tid", "?")
             syms = self._bt_by_thread.get(db_id, []) if db_id is not None else []
 
-            free_count = sum(
-                1 for s in syms if any(f in s for f in _FREE_SYMBOLS)
-            )
+            free_count = sum(1 for s in syms if any(f in s for f in _FREE_SYMBOLS))
             if free_count >= 2:
                 evidence.append(
                     f"TID {tid}: free-related symbols appear {free_count}x in backtrace"
@@ -387,7 +396,7 @@ class CrashPatternEngine:
             description=f"Multiple free() calls in backtrace ({len(evidence)} thread(s))",
             evidence=evidence,
             suggestion="Enable AddressSanitizer or Valgrind. "
-                       "Ensure ownership is clear — each allocation freed exactly once.",
+            "Ensure ownership is clear — each allocation freed exactly once.",
         )
 
     def _detect_rwx_anomaly(self) -> CrashPattern | None:
@@ -418,6 +427,6 @@ class CrashPatternEngine:
             description=f"{len(rwx_regions)} RWX non-library memory region(s) — potential code injection or JIT",
             evidence=rwx_regions,
             suggestion="Investigate anonymous RWX regions. "
-                       "Legitimate JIT engines (e.g. V8, LuaJIT) produce these; "
-                       "unexpected ones may indicate shellcode injection.",
+            "Legitimate JIT engines (e.g. V8, LuaJIT) produce these; "
+            "unexpected ones may indicate shellcode injection.",
         )

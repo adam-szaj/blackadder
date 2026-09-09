@@ -339,10 +339,13 @@ class FunctionHasher:
                 # Extract instruction part (skip address and hex bytes)
                 # Format: address: hex hex hex ... instruction
                 # Example: 1000:	48 89 e5                	mov    %rsp,%rbp
-                parts = line.split("\t", 1)
-                if len(parts) >= 2:
-                    instruction = parts[-1]
-                    func_lines.append(instruction)
+                instruction = re.match(
+                    r"^[0-9a-f]+:\s+(?:[0-9a-f]{2}\s+)+(.*)$",
+                    line,
+                    re.IGNORECASE,
+                )
+                if instruction and instruction.group(1):
+                    func_lines.append(instruction.group(1).strip())
 
         logger.debug(
             "function_assembly_extracted",

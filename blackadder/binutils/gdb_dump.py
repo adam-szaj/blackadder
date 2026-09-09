@@ -21,7 +21,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-
 # ============================================================================
 # Data classes
 # ============================================================================
@@ -30,20 +29,22 @@ from dataclasses import dataclass, field
 @dataclass
 class GdbFrame:
     """A single backtrace frame from GDB output."""
+
     frame_num: int
-    address: int | None        # None when GDB omits the address (inline / no-debug)
-    symbol: str | None         # Function name (demangled if GDB did it)
-    args: str | None           # Raw argument string
-    source_file: str | None    # "file.cpp"
-    source_line: int | None    # Line number
+    address: int | None  # None when GDB omits the address (inline / no-debug)
+    symbol: str | None  # Function name (demangled if GDB did it)
+    args: str | None  # Raw argument string
+    source_file: str | None  # "file.cpp"
+    source_line: int | None  # Line number
 
 
 @dataclass
 class GdbThread:
     """A thread as reported by GDB 'thread apply all bt'."""
-    gdb_thread_num: int        # GDB thread number (Thread N)
-    tid: int                   # OS LWP / TID
-    name: str | None           # Thread name in quotes, if present
+
+    gdb_thread_num: int  # GDB thread number (Thread N)
+    tid: int  # OS LWP / TID
+    name: str | None  # Thread name in quotes, if present
     frames: list[GdbFrame] = field(default_factory=list)
     registers: dict[str, int] = field(default_factory=dict)  # reg name → value
     crash_instruction: str | None = None  # raw asm text from "x/1i $pc", e.g. "movl $0x2a,(%rdi)"
@@ -52,6 +53,7 @@ class GdbThread:
 @dataclass
 class GdbDump:
     """Full parsed GDB dump."""
+
     threads: list[GdbThread] = field(default_factory=list)
     # Registers that appear before any "Thread N" header (single-thread dump
     # or registers printed at end without thread context)
@@ -73,32 +75,42 @@ _RE_THREAD_HEADER = re.compile(
 # "#0  symbol () at file.c:10"              ← no address
 # "#0  0x00007f12 in ?? ()"                ← unknown symbol
 _RE_FRAME = re.compile(
-    r'^#(\d+)\s+'
-    r'(?:(0x[0-9a-fA-F]+)\s+in\s+)?'   # optional address + "in"
-    r'([^\s(]+)'                          # symbol name
-    r'(?:\s*\(([^)]*)\))?'               # optional args
-    r'(?:\s+at\s+([^:]+):(\d+))?',       # optional "at file:line"
+    r"^#(\d+)\s+"
+    r"(?:(0x[0-9a-fA-F]+)\s+in\s+)?"  # optional address + "in"
+    r"([^\s(]+)"  # symbol name
+    r"(?:\s*\(([^)]*)\))?"  # optional args
+    r"(?:\s+at\s+([^:]+):(\d+))?",  # optional "at file:line"
 )
 
 # "rax            0x0   0"  or  "rip            0x400a1c  0x400a1c <main>"
 _RE_REGISTER = re.compile(
-    r'^(\w+)\s+(0x[0-9a-fA-F]+|\d+)\s',
+    r"^(\w+)\s+(0x[0-9a-fA-F]+|\d+)\s",
 )
 
 # "=> 0x55555555512d <f0(int*)+4>:  movl   $0x2a,(%rdi)"
 # "   0x55555555512d <f0+4>:        mov    eax,DWORD PTR [rdi]"
 # Captures everything after the colon as the raw instruction text.
 _RE_CRASH_INSN = re.compile(
-    r'^(?:=>)?\s*0x[0-9a-fA-F]+(?:\s+<[^>]*>)?:\s+(?:[0-9a-fA-F]{2}\s+)*(.+)$'
+    r"^(?:=>)?\s*0x[0-9a-fA-F]+(?:\s+<[^>]*>)?:\s+(?:[0-9a-fA-F]{2}\s+)*(.+)$"
 )
 
 # Registers to skip — GDB pseudo-regs and display-only fields that are not
 # actual CPU registers (no fixed set per-arch: we accept everything else).
 _SKIP_REGS = {
-    "fctrl", "fstat", "ftag", "fiseg", "fioff", "foseg", "fooff", "fop",
-    "mxcsr", "mxcr_mask",  # x87/SSE control
-    "orig_rax", "orig_eax",  # Linux syscall restart pseudo-reg
-    "fs_base", "gs_base",    # segment bases (rarely useful)
+    "fctrl",
+    "fstat",
+    "ftag",
+    "fiseg",
+    "fioff",
+    "foseg",
+    "fooff",
+    "fop",
+    "mxcsr",
+    "mxcr_mask",  # x87/SSE control
+    "orig_rax",
+    "orig_eax",  # Linux syscall restart pseudo-reg
+    "fs_base",
+    "gs_base",  # segment bases (rarely useful)
 }
 
 
@@ -198,14 +210,16 @@ def parse_gdb_dump(text: str) -> GdbDump:
                 if symbol in ("??", "???", None):
                     symbol = None
 
-                current_thread.frames.append(GdbFrame(
-                    frame_num=frame_num,
-                    address=address,
-                    symbol=symbol,
-                    args=args.strip() if args else None,
-                    source_file=src_file.strip() if src_file else None,
-                    source_line=src_line,
-                ))
+                current_thread.frames.append(
+                    GdbFrame(
+                        frame_num=frame_num,
+                        address=address,
+                        symbol=symbol,
+                        args=args.strip() if args else None,
+                        source_file=src_file.strip() if src_file else None,
+                        source_line=src_line,
+                    )
+                )
             continue
 
     return dump
@@ -214,16 +228,17 @@ def parse_gdb_dump(text: str) -> GdbDump:
 @dataclass
 class LockStateEntry:
     """One thread's lock blocking info from find_deadlock.py JSON output."""
+
     pid: int
     tid: int
     name: str | None
     gdb_thread_num: int
     blocking_function: str
-    lock_type: str                # "mutex" | "rwlock_write" | "rwlock_read" | "unknown"
+    lock_type: str  # "mutex" | "rwlock_write" | "rwlock_read" | "unknown"
     waiting_for_addr: int | None  # Lock address (futex uaddr)
-    lock_symbol: str | None       # Variable name e.g. "m1", "rw1"
-    owner_tid: int | None         # TID of thread holding the lock (None = unknown)
-    reader_count: int             # For rwlock_read: number of active readers
+    lock_symbol: str | None  # Variable name e.g. "m1", "rw1"
+    owner_tid: int | None  # TID of thread holding the lock (None = unknown)
+    reader_count: int  # For rwlock_read: number of active readers
 
 
 def parse_lock_state(text: str) -> list[LockStateEntry]:
@@ -274,18 +289,20 @@ def parse_lock_state(text: str) -> list[LockStateEntry]:
             except (ValueError, TypeError):
                 pass
 
-        entries.append(LockStateEntry(
-            pid=int(d.get("pid", 0)),
-            tid=int(d.get("tid", 0)),
-            name=d.get("name") or None,
-            gdb_thread_num=int(d.get("gdb_thread_num", 0)),
-            blocking_function=d.get("blocking_function", ""),
-            lock_type=d.get("lock_type", "unknown"),
-            waiting_for_addr=addr,
-            lock_symbol=d.get("lock_symbol") or None,
-            owner_tid=d.get("owner_tid"),  # int or None
-            reader_count=int(d.get("reader_count", 0)),
-        ))
+        entries.append(
+            LockStateEntry(
+                pid=int(d.get("pid", 0)),
+                tid=int(d.get("tid", 0)),
+                name=d.get("name") or None,
+                gdb_thread_num=int(d.get("gdb_thread_num", 0)),
+                blocking_function=d.get("blocking_function", ""),
+                lock_type=d.get("lock_type", "unknown"),
+                waiting_for_addr=addr,
+                lock_symbol=d.get("lock_symbol") or None,
+                owner_tid=d.get("owner_tid"),  # int or None
+                reader_count=int(d.get("reader_count", 0)),
+            )
+        )
 
     return entries
 

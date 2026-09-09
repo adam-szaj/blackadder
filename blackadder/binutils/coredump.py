@@ -343,11 +343,9 @@ class CoreDumpParser:
             perms += "x" if "E" in flags else "-"
             perms += "p"  # Private (from core dump)
 
-            # Create mapping — convert to signed 64-bit for SQLite INTEGER storage
-            from blackadder.models import addr_to_db
             mapping = {
-                "start_addr": addr_to_db(vaddr),
-                "end_addr": addr_to_db(vaddr + memsz),
+                "start_addr": vaddr,
+                "end_addr": vaddr + memsz,
                 "perms": perms,
                 "offset": header.get("offset", 0),
                 "pathname": "[core dump segment]",

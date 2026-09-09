@@ -6,8 +6,8 @@ for testing Advanced CLI commands and Register Interpreter.
 """
 
 from datetime import datetime
-from blackadder.models import ProcessSnapshot, MemoryMapping
 
+from blackadder.models import MemoryMapping, ProcessSnapshot
 
 # ============================================================================
 # Mock Process Data
@@ -92,8 +92,8 @@ def mock_memory_mappings_x86_64() -> list[MemoryMapping]:
         MemoryMapping(
             id=6,
             process_id=1,
-            start_addr=0x7ffff7e00000,
-            end_addr=0x7ffff7e1c000,
+            start_addr=0x7FFFF7E00000,
+            end_addr=0x7FFFF7E1C000,
             perms="r-xp",
             offset=0x0,
             pathname="/lib/x86_64-linux-gnu/libc.so.6",
@@ -102,8 +102,8 @@ def mock_memory_mappings_x86_64() -> list[MemoryMapping]:
         MemoryMapping(
             id=5,
             process_id=1,
-            start_addr=0x7ffff7f00000,
-            end_addr=0x7ffffffff000,
+            start_addr=0x7FFFF7F00000,
+            end_addr=0x7FFFFFFFF000,
             perms="rw-p",
             offset=0x0,
             pathname="[stack]",
@@ -112,8 +112,8 @@ def mock_memory_mappings_x86_64() -> list[MemoryMapping]:
         MemoryMapping(
             id=4,
             process_id=1,
-            start_addr=0x7ffff7ffd000,
-            end_addr=0x7ffff7ffe000,
+            start_addr=0x7FFFF7FFD000,
+            end_addr=0x7FFFF7FFE000,
             perms="r-xp",
             offset=0x0,
             pathname="[vdso]",
@@ -163,8 +163,8 @@ def mock_memory_mappings_arm64() -> list[MemoryMapping]:
         MemoryMapping(
             id=13,
             process_id=2,
-            start_addr=0xffffffffb000,
-            end_addr=0xffffffffc000,
+            start_addr=0xFFFFFFFFB000,
+            end_addr=0xFFFFFFFFC000,
             perms="r-xp",
             offset=0x0,
             pathname="[vdso]",
@@ -173,7 +173,7 @@ def mock_memory_mappings_arm64() -> list[MemoryMapping]:
         MemoryMapping(
             id=14,
             process_id=2,
-            start_addr=0xfffffffffc000,
+            start_addr=0xFFFFFFFFFC000,
             end_addr=0x10000000000000,
             perms="rw-p",
             offset=0x0,
@@ -183,8 +183,8 @@ def mock_memory_mappings_arm64() -> list[MemoryMapping]:
         MemoryMapping(
             id=15,
             process_id=2,
-            start_addr=0xffff8000000,
-            end_addr=0xffff8020000,
+            start_addr=0xFFFF8000000,
+            end_addr=0xFFFF8020000,
             perms="r-xp",
             offset=0x0,
             pathname="/lib/aarch64-linux-gnu/libc.so.6",
@@ -234,8 +234,8 @@ def mock_memory_mappings_arm() -> list[MemoryMapping]:
         MemoryMapping(
             id=23,
             process_id=3,
-            start_addr=0xb6ffd000,
-            end_addr=0xb6ffe000,
+            start_addr=0xB6FFD000,
+            end_addr=0xB6FFE000,
             perms="r-xp",
             offset=0x0,
             pathname="[vdso]",
@@ -244,8 +244,8 @@ def mock_memory_mappings_arm() -> list[MemoryMapping]:
         MemoryMapping(
             id=24,
             process_id=3,
-            start_addr=0xbef00000,
-            end_addr=0xbf000000,
+            start_addr=0xBEF00000,
+            end_addr=0xBF000000,
             perms="rw-p",
             offset=0x0,
             pathname="[stack]",
@@ -254,8 +254,8 @@ def mock_memory_mappings_arm() -> list[MemoryMapping]:
         MemoryMapping(
             id=25,
             process_id=3,
-            start_addr=0xb6e00000,
-            end_addr=0xb6e1c000,
+            start_addr=0xB6E00000,
+            end_addr=0xB6E1C000,
             perms="r-xp",
             offset=0x0,
             pathname="/lib/arm-linux-gnueabihf/libc.so.6",
@@ -273,13 +273,13 @@ def mock_register_state_x86_64_code_pointer() -> dict[str, int | None]:
     return {
         "rax": 0x0,  # Return value
         "rbx": 0x0,  # Saved register
-        "rcx": 0x123456789abc,  # Parameter
+        "rcx": 0x123456789ABC,  # Parameter
         "rdx": 0x0,  # Parameter
         "rsi": 0x0,  # Parameter
         "rdi": 0x0,  # Parameter
-        "rbp": 0x7fffffffd000,  # Frame pointer (stack)
-        "rsp": 0x7fffffffdf00,  # Stack pointer
-        "rip": 0x400a1c,  # CODE POINTER - main function
+        "rbp": 0x7FFFFFFFD000,  # Frame pointer (stack)
+        "rsp": 0x7FFFFFFFDF00,  # Stack pointer
+        "rip": 0x400A1C,  # CODE POINTER - main function
         "r8": 0x0,
         "r9": 0x0,
         "r10": 0x0,
@@ -301,9 +301,9 @@ def mock_register_state_x86_64_heap_pointer() -> dict[str, int | None]:
         "rdx": 0x0,
         "rsi": 0x0,
         "rdi": 0x0,
-        "rbp": 0x7fffffffd000,
-        "rsp": 0x7fffffffdf00,
-        "rip": 0x400a25,
+        "rbp": 0x7FFFFFFFD000,
+        "rsp": 0x7FFFFFFFDF00,
+        "rip": 0x400A25,
         "r8": 0x0,
         "r9": 0x0,
         "r10": 0x0,
@@ -325,9 +325,9 @@ def mock_register_state_x86_64_stack_pointer() -> dict[str, int | None]:
         "rdx": 0x0,
         "rsi": 0x0,
         "rdi": 0x0,
-        "rbp": 0x7fffffffdd00,  # STACK POINTER - frame pointer
-        "rsp": 0x7fffffffdcc0,  # STACK POINTER - stack pointer
-        "rip": 0x400a2c,
+        "rbp": 0x7FFFFFFFDD00,  # STACK POINTER - frame pointer
+        "rsp": 0x7FFFFFFFDCC0,  # STACK POINTER - stack pointer
+        "rip": 0x400A2C,
         "r8": 0x0,
         "r9": 0x0,
         "r10": 0x0,
@@ -356,7 +356,7 @@ def mock_register_state_arm64_code_pointer() -> dict[str, int | None]:
         "x5": 0x0,  # Temporary
         "x6": 0x0,  # Temporary
         "x7": 0x0,  # Temporary
-        "x8": 0xffffffffffd00000,  # Frame pointer (stack)
+        "x8": 0xFFFFFFFFFFD00000,  # Frame pointer (stack)
         "x9": 0x0,  # Saved
         "x10": 0x0,  # Argument
         "x11": 0x0,  # Argument
@@ -377,10 +377,10 @@ def mock_register_state_arm64_code_pointer() -> dict[str, int | None]:
         "x26": 0x0,  # Saved
         "x27": 0x0,  # Saved
         "x28": 0x0,  # Temporary
-        "x29": 0xffffffffffd01000,  # Frame pointer
-        "x30": 0x400a1c,  # Link register (CODE POINTER)
-        "sp": 0xfffffffffffdf00,  # Stack pointer
-        "pc": 0x400a20,  # CODE POINTER - instruction pointer
+        "x29": 0xFFFFFFFFFFD01000,  # Frame pointer
+        "x30": 0x400A1C,  # Link register (CODE POINTER)
+        "sp": 0xFFFFFFFFFFFDF00,  # Stack pointer
+        "pc": 0x400A20,  # CODE POINTER - instruction pointer
     }
 
 
@@ -395,7 +395,7 @@ def mock_register_state_arm64_heap_pointer() -> dict[str, int | None]:
         "x5": 0x0,
         "x6": 0x0,
         "x7": 0x0,
-        "x8": 0xffffffffffd00000,
+        "x8": 0xFFFFFFFFFFD00000,
         "x9": 0x0,
         "x10": 0x0,
         "x11": 0x0,
@@ -416,10 +416,10 @@ def mock_register_state_arm64_heap_pointer() -> dict[str, int | None]:
         "x26": 0x0,
         "x27": 0x0,
         "x28": 0x0,
-        "x29": 0xffffffffffd01000,
-        "x30": 0x400a1c,
-        "sp": 0xfffffffffffdf00,
-        "pc": 0x400a25,
+        "x29": 0xFFFFFFFFFFD01000,
+        "x30": 0x400A1C,
+        "sp": 0xFFFFFFFFFFFDF00,
+        "pc": 0x400A25,
     }
 
 
@@ -442,11 +442,11 @@ def mock_register_state_arm_code_pointer() -> dict[str, int | None]:
         "r8": 0x0,  # Saved
         "r9": 0x0,  # Saved
         "r10": 0x0,  # Saved
-        "r11": 0xbef00000,  # Frame pointer (stack)
+        "r11": 0xBEF00000,  # Frame pointer (stack)
         "r12": 0x0,  # IP (intra-procedure)
-        "r13": 0xbef00f00,  # Stack pointer
-        "r14": 0x8a1c,  # Link register (CODE POINTER)
-        "r15": 0x8a20,  # CODE POINTER - program counter
+        "r13": 0xBEF00F00,  # Stack pointer
+        "r14": 0x8A1C,  # Link register (CODE POINTER)
+        "r15": 0x8A20,  # CODE POINTER - program counter
     }
 
 
@@ -464,11 +464,11 @@ def mock_register_state_arm_heap_pointer() -> dict[str, int | None]:
         "r8": 0x0,
         "r9": 0x0,
         "r10": 0x0,
-        "r11": 0xbef00000,
+        "r11": 0xBEF00000,
         "r12": 0x0,
-        "r13": 0xbef00f00,
-        "r14": 0x8a1c,
-        "r15": 0x8a25,
+        "r13": 0xBEF00F00,
+        "r14": 0x8A1C,
+        "r15": 0x8A25,
     }
 
 
@@ -480,14 +480,14 @@ def mock_register_state_arm_heap_pointer() -> dict[str, int | None]:
 def mock_symbols() -> dict[int, str]:
     """Mock symbol addresses for code pointer resolution."""
     return {
-        0x400a1c: "main",
-        0x400a25: "process_data",
-        0x400a2c: "calculate_sum",
-        0x400b00: "malloc_wrapper",
-        0x400b1c: "free_wrapper",
-        0x7ffff7e00000: "__libc_start_main",
-        0x7ffff7e1c5c0: "libc_malloc",
-        0x7ffff7e1d0c0: "libc_free",
+        0x400A1C: "main",
+        0x400A25: "process_data",
+        0x400A2C: "calculate_sum",
+        0x400B00: "malloc_wrapper",
+        0x400B1C: "free_wrapper",
+        0x7FFFF7E00000: "__libc_start_main",
+        0x7FFFF7E1C5C0: "libc_malloc",
+        0x7FFFF7E1D0C0: "libc_free",
     }
 
 

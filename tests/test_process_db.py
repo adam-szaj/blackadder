@@ -33,9 +33,10 @@ async def test_address_to_binary(process_db, sample_maps_content):
     binary_info = await process_db.address_to_binary(process.id, 0x555555554100)
 
     assert binary_info is not None
-    binary_path, offset = binary_info
+    binary_path, offset, binary_id = binary_info
     assert "/myapp" in binary_path
     assert offset == 0x100
+    assert binary_id is None
 
 
 @pytest.mark.asyncio
@@ -89,11 +90,11 @@ async def test_symbol_cache_basic(process_db):
 
     # Manually add to cache
     key = ("/lib/libc.so.6", 0x1000)
-    process_db.symbol_cache[key] = "malloc"
+    process_db._cache_symbol(key, ("malloc", None, None))
 
     # Check it's cached
     assert len(process_db.symbol_cache) == 1
-    assert process_db.symbol_cache[key] == "malloc"
+    assert process_db.symbol_cache[key] == ("malloc", None, None)
 
 
 @pytest.mark.asyncio
@@ -104,7 +105,7 @@ async def test_symbol_cache_size_limit(process_db):
 
     # Add items beyond limit
     for i in range(5):
-        process_db.symbol_cache[(f"/lib/lib{i}.so", 0x1000)] = f"func{i}"
+        process_db._cache_symbol((f"/lib/lib{i}.so", 0x1000), (f"func{i}", None, None))
 
     # Should evict oldest items
     assert len(process_db.symbol_cache) <= 3
@@ -113,7 +114,7 @@ async def test_symbol_cache_size_limit(process_db):
 @pytest.mark.asyncio
 async def test_subprocess_semaphore_limits_resolve_frame(process_db, sample_maps_content):
     """Test that subprocess semaphore limits parallel frame resolution."""
-    process = await process_db.load_maps(12345, sample_maps_content)
+    await process_db.load_maps(12345, sample_maps_content)
 
     # Check semaphore is properly initialized
     assert process_db.subprocess_sem._value <= process_db.config.max_subprocess_workers

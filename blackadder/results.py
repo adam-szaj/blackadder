@@ -15,9 +15,7 @@ class FingerprintResult:
     """Result of computing function fingerprints from a binary."""
 
     fingerprints: dict[str, str] = field(default_factory=dict)
-    status: str = (
-        "success"  # "success", "file_not_found", "not_elf", "no_functions", "parse_error", "permission_denied"
-    )
+    status: str = "success"  # "success", "file_not_found", "not_elf", "no_functions", "parse_error", "permission_denied"
     reason: str | None = None
     binary_path: str | None = None
 
@@ -30,9 +28,7 @@ class CoreDumpResult:
     elf_headers: dict = field(default_factory=dict)
     pid: int | None = None
     signal: int | None = None
-    status: str = (
-        "success"  # "success", "file_not_found", "not_elf", "not_core_dump", "parse_error", "corrupted"
-    )
+    status: str = "success"  # "success", "file_not_found", "not_elf", "not_core_dump", "parse_error", "corrupted"
     reason: str | None = None
     core_path: str | None = None
 

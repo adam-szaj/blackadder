@@ -4,10 +4,11 @@ Tests AnalysisIntegration with ProcessSnapshot data and analyzers.
 """
 
 import pytest
+
 from blackadder.analysis_integration import AnalysisIntegration, ProcessMemoryReader
-from blackadder.db.base import AsyncDatabaseManager
 from blackadder.config import BlackadderConfig
-from blackadder.models import ProcessSnapshot, MemoryMapping
+from blackadder.db.base import AsyncDatabaseManager
+from blackadder.models import MemoryMapping, ProcessSnapshot
 
 
 @pytest.fixture
@@ -61,15 +62,15 @@ async def sample_process(manager):
                 pathname="[heap]",
             ),
             MemoryMapping(
-                start_addr=0x7fffde000000,
-                end_addr=0x7fffdf000000,
+                start_addr=0x7FFFDE000000,
+                end_addr=0x7FFFDF000000,
                 perms="rw-p",
                 offset=0,
                 pathname="[stack]",
             ),
             MemoryMapping(
-                start_addr=0x7ffff7e00000,
-                end_addr=0x7ffff7f00000,
+                start_addr=0x7FFFF7E00000,
+                end_addr=0x7FFFF7F00000,
                 perms="r-xp",
                 offset=0,
                 pathname="/lib64/libc.so.6",
@@ -162,7 +163,7 @@ class TestAnalysisIntegration:
     async def test_analyze_registers_with_data(self, integration, sample_process):
         """Test register analysis with register data."""
         register_state = {
-            "rax": 0x400a1c,  # Code pointer
+            "rax": 0x400A1C,  # Code pointer
             "rbx": 0x1234567,  # Unknown
             "rcx": 42,  # Small constant
         }
@@ -178,13 +179,11 @@ class TestAnalysisIntegration:
         assert "grouped_by_type" in result
 
     @pytest.mark.asyncio
-    async def test_analyze_registers_interesting_only(
-        self, integration, sample_process
-    ):
+    async def test_analyze_registers_interesting_only(self, integration, sample_process):
         """Test register analysis with interesting_only filter."""
         register_state = {
             "rax": 0,  # Trivial
-            "rbx": 0x400a1c,  # Code pointer (interesting)
+            "rbx": 0x400A1C,  # Code pointer (interesting)
             "rcx": 0,  # Trivial
         }
 
@@ -203,8 +202,8 @@ class TestAnalysisIntegration:
         """Test stack validation."""
         result = await integration.validate_stack(
             sample_process,
-            frame_pointer=0x7fffde100000,
-            return_address=0x400a1c,
+            frame_pointer=0x7FFFDE100000,
+            return_address=0x400A1C,
         )
 
         assert result["process_id"] == sample_process.id
@@ -290,7 +289,7 @@ class TestAnalysisIntegrationWorkflow:
         # 2. Analyze registers
         reg_result = await integration.analyze_registers(
             process,
-            register_state={"rax": 0x400a1c},
+            register_state={"rax": 0x400A1C},
         )
         assert reg_result["process_id"] == process.id
 
@@ -303,11 +302,7 @@ class TestAnalysisIntegrationWorkflow:
         assert heap_result["process_id"] == process.id
 
         # All should reference same process
-        assert (
-            reg_result["process_id"]
-            == stack_result["process_id"]
-            == heap_result["process_id"]
-        )
+        assert reg_result["process_id"] == stack_result["process_id"] == heap_result["process_id"]
 
     @pytest.mark.asyncio
     async def test_analysis_with_missing_process(self, integration):

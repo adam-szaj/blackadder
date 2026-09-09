@@ -10,7 +10,7 @@ from pathlib import Path
 from blackadder.arch.arm import ARM64Architecture, ARMArchitecture
 from blackadder.arch.base import Architecture
 from blackadder.arch.riscv import RV32Architecture, RV64Architecture
-from blackadder.arch.x86 import X86Architecture, X86_64Architecture
+from blackadder.arch.x86 import X86_64Architecture, X86Architecture
 from blackadder.exceptions import FileFormatError
 
 logger = logging.getLogger("blackadder.arch.detector")
@@ -123,7 +123,7 @@ def detect_architecture(binary_path: str) -> Architecture:
 
             return arch
 
-    except (OSError, IOError) as e:
+    except OSError as e:
         logger.error(
             "failed_to_read_binary",
             extra={"binary_path": binary_path, "error": str(e)},

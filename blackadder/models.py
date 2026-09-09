@@ -5,14 +5,15 @@ Defines models for both rootfs database (binary metadata) and process database
 (runtime analysis). All models are type-safe with Pydantic validation.
 """
 
+import hashlib
+import json
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Optional
 
-import struct
-
 from pydantic import BaseModel, field_validator
-from sqlalchemy import Index, UniqueConstraint
+from sqlalchemy import BigInteger, Index, UniqueConstraint
+from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, Relationship, SQLModel
 
 _INT64_MAX = (1 << 63) - 1
@@ -27,6 +28,8 @@ def addr_to_db(addr: int) -> int:
     INT64_MAX and must be reinterpreted as signed to avoid overflow errors.
     Python's arbitrary-precision int transparently undoes this on read.
     """
+    if not 0 <= addr <= _UINT64_MASK:
+        raise ValueError(f"Address {addr} is outside the unsigned 64-bit range")
     if addr > _INT64_MAX:
         return addr - (1 << 64)
     return addr
@@ -37,6 +40,35 @@ def addr_from_db(val: int) -> int:
     if val < 0:
         return val + (1 << 64)
     return val
+
+
+class UInt64(TypeDecorator[int]):
+    """Store unsigned 64-bit Python integers in SQLite's signed INTEGER."""
+
+    impl = BigInteger
+    cache_ok = True
+
+    def process_bind_param(self, value: int | None, _dialect) -> int | None:
+        return None if value is None else addr_to_db(value)
+
+    def process_result_value(self, value: int | None, _dialect) -> int | None:
+        return None if value is None else addr_from_db(value)
+
+
+def dwarf_identity_key(
+    tag: str,
+    name: str | None,
+    byte_size: int | None,
+    encoding: str | None,
+) -> str:
+    """Return a stable, non-null key for a canonical DWARF type."""
+    identity = json.dumps(
+        [tag, name, byte_size, encoding],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(identity.encode()).hexdigest()
+
 
 # ============================================================================
 # Pydantic models for validation and API
@@ -101,8 +133,8 @@ class SectionHeader(SQLModel, table=True):
     idx: int  # Section index
     name: str = Field(index=True, max_length=32)  # ".text", ".bss", etc.
     size: int
-    vma: int  # Virtual memory address
-    lma: int  # Load memory address
+    vma: int = Field(sa_type=UInt64)  # Virtual memory address
+    lma: int = Field(sa_type=UInt64)  # Load memory address
     off: int  # File offset
     align: int  # Alignment
 
@@ -119,7 +151,7 @@ class Symbol(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
-    address: int = Field(index=True)
+    address: int = Field(index=True, sa_type=UInt64)
     scope: str = Field(max_length=1)  # "l" (local), "g" (global), "w" (weak)
     sym_type: str = Field(max_length=1)  # "F" (function), "O" (object), etc.
     section: str = Field(index=True, max_length=32)  # ".text", ".bss", "*UND*", etc.
@@ -160,7 +192,7 @@ class SymbolCache(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
     offset: int  # File offset within binary (not virtual address)
-    symbol: str | None = Field(default=None, max_length=512)   # demangled symbol name
+    symbol: str | None = Field(default=None, max_length=512)  # demangled symbol name
     source_file: str | None = Field(default=None, max_length=512)
     source_line: int | None = None
 
@@ -182,14 +214,11 @@ class CanonicalDwarfType(SQLModel, table=True):
     __tablename__ = "canonical_dwarf_type"
 
     id: int | None = Field(default=None, primary_key=True)
-    tag: str = Field(max_length=32)            # "structure_type", "base_type", "typedef", etc.
+    identity_key: str = Field(unique=True, index=True, max_length=64)
+    tag: str = Field(max_length=32)  # "structure_type", "base_type", "typedef", etc.
     name: str | None = Field(default=None, index=True, max_length=256)
-    byte_size: int | None = None               # Total size in bytes (None for const/volatile wrappers)
+    byte_size: int | None = None  # Total size in bytes (None for const/volatile wrappers)
     encoding: str | None = Field(default=None, max_length=32)  # "signed", "unsigned", "float", etc.
-
-    __table_args__ = (UniqueConstraint("tag", "name", "byte_size", "encoding"),)
-
-    members: list["DwarfMember"] = Relationship(back_populates="canonical_type")
 
 
 class BinaryDwarfRef(SQLModel, table=True):
@@ -205,14 +234,16 @@ class BinaryDwarfRef(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id")
-    die_offset: int                    # Local .debug_info offset in this binary
+    die_offset: int  # Local .debug_info offset in this binary
     canonical_id: int = Field(foreign_key="canonical_dwarf_type.id")
-    type_ref_die: int | None = None    # die_offset of referenced type (typedef→underlying, etc.)
+    type_ref_die: int | None = None  # die_offset of referenced type (typedef→underlying, etc.)
 
     __table_args__ = (
         UniqueConstraint("binary_id", "die_offset"),
         Index("ix_binary_dwarf_ref_binary", "binary_id"),
     )
+
+    members: list["DwarfMember"] = Relationship(back_populates="binary_ref")
 
 
 class DwarfMember(SQLModel, table=True):
@@ -225,12 +256,12 @@ class DwarfMember(SQLModel, table=True):
     """
 
     id: int | None = Field(default=None, primary_key=True)
-    canonical_type_id: int = Field(foreign_key="canonical_dwarf_type.id", index=True)
+    binary_ref_id: int = Field(foreign_key="binary_dwarf_ref.id", index=True)
     name: str | None = Field(default=None, max_length=256)  # None for anonymous embedded structs
-    byte_offset: int                   # DW_AT_data_member_location (decimal bytes from struct start)
-    member_type_ref: int               # die_offset of the field's type (resolve via BinaryDwarfRef)
+    byte_offset: int  # DW_AT_data_member_location (decimal bytes from struct start)
+    member_type_ref: int  # die_offset of the field's type (resolve via BinaryDwarfRef)
 
-    canonical_type: "CanonicalDwarfType" = Relationship(back_populates="members")
+    binary_ref: "BinaryDwarfRef" = Relationship(back_populates="members")
 
 
 class DwarfSubprogram(SQLModel, table=True):
@@ -248,7 +279,7 @@ class DwarfSubprogram(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
-    die_offset: int                    # .debug_info byte offset within binary
+    die_offset: int  # .debug_info byte offset within binary
     name: str | None = Field(default=None, max_length=256)
 
     __table_args__ = (
@@ -279,15 +310,11 @@ class DwarfVariable(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     binary_id: int = Field(foreign_key="binary.id", index=True)
-    subprogram_id: int | None = Field(
-        default=None, foreign_key="dwarfsubprogram.id", index=True
-    )
-    die_offset: int                    # .debug_info byte offset
-    tag: str = Field(max_length=32)    # "variable" or "formal_parameter"
+    subprogram_id: int | None = Field(default=None, foreign_key="dwarfsubprogram.id", index=True)
+    die_offset: int  # .debug_info byte offset
+    tag: str = Field(max_length=32)  # "variable" or "formal_parameter"
     name: str | None = Field(default=None, max_length=256)
-    canonical_type_id: int | None = Field(
-        default=None, foreign_key="canonical_dwarf_type.id"
-    )
+    canonical_type_id: int | None = Field(default=None, foreign_key="canonical_dwarf_type.id")
     location_type: str | None = Field(default=None, max_length=16)
     location_fbreg: int | None = None  # Signed byte offset from frame base
     location_register: str | None = Field(default=None, max_length=32)
@@ -328,7 +355,7 @@ class DebugLine(SQLModel, table=True):
     binary_id: int = Field(foreign_key="binary.id", index=True)
     source_file_id: int = Field(foreign_key="sourcefile.id")
     line_number: int
-    address: int = Field(index=True)
+    address: int = Field(index=True, sa_type=UInt64)
     # No UNIQUE — _sync_parse_debug_line deduplicates via seen-set before INSERT.
 
 
@@ -361,12 +388,12 @@ class Thread(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
-    tid: int                            # Thread ID (LWP)
-    name: str | None = None             # Thread name from /proc/PID/task/TID/comm
-    wchan: str | None = None            # Kernel wait channel (/proc/PID/task/TID/wchan)
-    syscall: str | None = None          # Current syscall + args, raw text
-    stack_start: int | None = None      # Stack region start address
-    stack_end: int | None = None        # Stack region end address
+    tid: int  # Thread ID (LWP)
+    name: str | None = None  # Thread name from /proc/PID/task/TID/comm
+    wchan: str | None = None  # Kernel wait channel (/proc/PID/task/TID/wchan)
+    syscall: str | None = None  # Current syscall + args, raw text
+    stack_start: int | None = Field(default=None, sa_type=UInt64)
+    stack_end: int | None = Field(default=None, sa_type=UInt64)
 
     # Relationships
     process: "ProcessSnapshot" = Relationship(back_populates="threads")
@@ -389,13 +416,13 @@ class ProcessSnapshot(SQLModel, table=True):
 
     # Data source tracking
     source_type: str = Field(default="maps")  # primary source: "maps", "core_dump", "gdb_dump"
-    source_path: str | None = None           # path to primary source file
+    source_path: str | None = None  # path to primary source file
     sources_json: str = Field(default="[]")  # JSON array of all sources added via merge
 
     # Relationships
     mappings: list["MemoryMapping"] = Relationship(back_populates="process")
     process_binaries: list["ProcessBinary"] = Relationship(back_populates="process")
-    register_state: Optional["ProcessRegisterState"] = Relationship(back_populates="process")
+    register_states: list["ProcessRegisterState"] = Relationship(back_populates="process")
     threads: list["Thread"] = Relationship(back_populates="process")
 
 
@@ -404,15 +431,14 @@ class MemoryMapping(SQLModel, table=True):
     Virtual memory mapping from /proc/PID/maps.
 
     Describes which binary is loaded at which address range.
-    Addresses are stored as signed 64-bit integers (SQLite INTEGER) via addr_to_db()
-    so that kernel-space addresses (0xffff...) which exceed INT64_MAX are handled
-    correctly. Use addr_from_db() to recover the original unsigned value for display.
+    Python code always sees unsigned addresses. UInt64 converts them to/from the
+    signed two's-complement representation required by SQLite INTEGER.
     """
 
     id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
-    start_addr: int = Field(index=True)
-    end_addr: int = Field(index=True)
+    start_addr: int = Field(index=True, sa_type=UInt64)
+    end_addr: int = Field(index=True, sa_type=UInt64)
     perms: str = Field(max_length=4)  # "r-xp", "rw-p", etc.
     offset: int  # File offset into binary
     dev: str | None = Field(default=None, max_length=16)  # Device "fc:01"
@@ -435,7 +461,7 @@ class ProcessBinary(SQLModel, table=True):
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
     binary_id: int | None = Field(default=None, foreign_key="binary.id")  # None if binary not found
     mapping_id: int = Field(foreign_key="memorymapping.id")
-    binary_load_addr: int  # Base address where binary is loaded
+    binary_load_addr: int = Field(sa_type=UInt64)
 
     # Phase 2: assembly matching fields
     match_score: float | None = None  # 0.0-1.0, 1.0 = exact match
@@ -455,12 +481,14 @@ class BacktraceEntry(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     process_id: int = Field(foreign_key="processsnapshot.id", index=True)
     frame_num: int
-    address: int = Field(index=True)
+    address: int = Field(index=True, sa_type=UInt64)
     resolved_symbol: str = Field(max_length=512)  # "function_name+0x123"
     resolved_file: str | None = Field(default=None, max_length=512)  # "src/file.c"
     resolved_line: int | None = None
     match_confidence: float = Field(default=1.0)  # 0.0-1.0 for fuzzy matches
-    thread_id: int | None = Field(default=None, foreign_key="thread.id", index=True)  # None for single-thread
+    thread_id: int | None = Field(
+        default=None, foreign_key="thread.id", index=True
+    )  # None for single-thread
 
 
 # ============================================================================
@@ -468,7 +496,7 @@ class BacktraceEntry(SQLModel, table=True):
 # ============================================================================
 
 
-class MemoryRegionType(str, Enum):
+class MemoryRegionType(StrEnum):
     """Classification of memory region type."""
 
     UNKNOWN = "unknown"
@@ -510,7 +538,7 @@ class ProcessRegisterState(SQLModel, table=True):
     registers_json: str = Field(default="{}")
 
     # Relationships
-    process: ProcessSnapshot = Relationship(back_populates="register_state")
+    process: ProcessSnapshot = Relationship(back_populates="register_states")
 
 
 class MemoryRegionAnalysis(SQLModel, table=True):

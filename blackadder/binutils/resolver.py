@@ -193,9 +193,6 @@ def parse_backtrace_auto(trace_text: str) -> list[int]:
     # Pattern 2: Kernel format - extract hex in brackets
     kernel_pattern = re.compile(r"\[<(?:0x)?([0-9a-f]{1,16})>\]", re.IGNORECASE | re.MULTILINE)
 
-    # Pattern 3: Raw hex (with or without 0x prefix)
-    raw_pattern = re.compile(r"(?:^|\n)(0x)?([0-9a-f]{1,16})(?:\s|$)", re.IGNORECASE)
-
     # Try GDB format first (most specific)
     gdb_matches = gdb_pattern.findall(trace_text)
     if gdb_matches:

@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-
 # ============================================================================
 # Data classes
 # ============================================================================
@@ -29,7 +28,7 @@ class DeadlockThread:
 
     tid: int
     name: str | None
-    evidence: str           # "futex_syscall" | "backtrace_lock" | "wchan_futex"
+    evidence: str  # "futex_syscall" | "backtrace_lock" | "wchan_futex"
     waiting_for: int | None  # mutex/futex uaddr, None if unknown
 
 
@@ -38,7 +37,7 @@ class DeadlockCycle:
     """A detected cycle in the thread wait graph."""
 
     tids: list[int]
-    evidence_level: str    # "certain" | "probable" | "possible"
+    evidence_level: str  # "certain" | "probable" | "possible"
     description: str
 
 
@@ -60,47 +59,51 @@ class DeadlockReport:
 # Backtrace symbols that indicate a thread is waiting on a lock.
 # Includes glibc internal variants (__GI___ prefix, ___ prefix) as seen in
 # GDB backtraces from stripped or partially-stripped binaries.
-_LOCK_SYMBOLS: frozenset[str] = frozenset({
-    # pthread mutex
-    "pthread_mutex_lock",
-    "pthread_mutex_timedlock",
-    "__pthread_mutex_lock",
-    "__pthread_mutex_lock_full",
-    "__GI___pthread_mutex_lock",
-    "___pthread_mutex_lock",
-    # glibc low-level futex lock
-    "__lll_lock_wait",
-    "__lll_lock_wait_private",
-    "__lll_timedlock_wait",
-    # pthread rwlock
-    "pthread_rwlock_rdlock",
-    "pthread_rwlock_wrlock",
-    "pthread_rwlock_timedrdlock",
-    "pthread_rwlock_timedwrlock",
-    "__GI___pthread_rwlock_rdlock",
-    "__GI___pthread_rwlock_wrlock",
-    "___pthread_rwlock_rdlock",
-    "___pthread_rwlock_wrlock",
-    # semaphores
-    "sem_wait",
-    "__sem_wait_common",
-    # kernel futex
-    "futex_wait",
-    "futex_wait_queue_me",
-    "__futex_abstimed_wait_common",
-    # syscall wrapper (GDB may show this when entering futex from userspace)
-    "__libc_do_syscall",
-})
+_LOCK_SYMBOLS: frozenset[str] = frozenset(
+    {
+        # pthread mutex
+        "pthread_mutex_lock",
+        "pthread_mutex_timedlock",
+        "__pthread_mutex_lock",
+        "__pthread_mutex_lock_full",
+        "__GI___pthread_mutex_lock",
+        "___pthread_mutex_lock",
+        # glibc low-level futex lock
+        "__lll_lock_wait",
+        "__lll_lock_wait_private",
+        "__lll_timedlock_wait",
+        # pthread rwlock
+        "pthread_rwlock_rdlock",
+        "pthread_rwlock_wrlock",
+        "pthread_rwlock_timedrdlock",
+        "pthread_rwlock_timedwrlock",
+        "__GI___pthread_rwlock_rdlock",
+        "__GI___pthread_rwlock_wrlock",
+        "___pthread_rwlock_rdlock",
+        "___pthread_rwlock_wrlock",
+        # semaphores
+        "sem_wait",
+        "__sem_wait_common",
+        # kernel futex
+        "futex_wait",
+        "futex_wait_queue_me",
+        "__futex_abstimed_wait_common",
+        # syscall wrapper (GDB may show this when entering futex from userspace)
+        "__libc_do_syscall",
+    }
+)
 
 # wchan values that indicate a thread is blocked in the kernel on a futex/mutex
-_WCHAN_BLOCKED: frozenset[str] = frozenset({
-    "futex_wait_queue_me",
-    "futex_wait",
-    "do_futex",
-    "futex",
-    "__se_sys_futex",
-    "do_sys_futex",
-})
+_WCHAN_BLOCKED: frozenset[str] = frozenset(
+    {
+        "futex_wait_queue_me",
+        "futex_wait",
+        "do_futex",
+        "futex",
+        "__se_sys_futex",
+        "do_sys_futex",
+    }
+)
 
 # Futex syscall numbers per architecture (we only have the syscall number, not arch)
 # 202 = x86-64, 240 = x86 (32-bit), 98 = ARM64, 240 = ARM (same as x86 happens to be)
@@ -114,15 +117,15 @@ _FUTEX_WAIT_OPS: frozenset[int] = frozenset({0, 9, 128, 137})
 # "<syscall_nr> <arg0_hex> <arg1_hex> ... <sp_hex> <pc_hex>"
 # For futex: arg0=uaddr (mutex address), arg1=op, arg2=val
 _RE_SYSCALL = re.compile(
-    r'^(\d+)'             # syscall number
-    r'\s+(0x[0-9a-f]+)'  # arg0: uaddr (futex address)
-    r'\s+(0x[0-9a-f]+)'  # arg1: futex op
-    r'(?:\s|$)',
+    r"^(\d+)"  # syscall number
+    r"\s+(0x[0-9a-f]+)"  # arg0: uaddr (futex address)
+    r"\s+(0x[0-9a-f]+)"  # arg1: futex op
+    r"(?:\s|$)",
     re.IGNORECASE,
 )
 
 # Regex to extract symbol base name (strip "+0x..." offset suffix)
-_RE_SYMBOL_BASE = re.compile(r'^([^+@(]+)')
+_RE_SYMBOL_BASE = re.compile(r"^([^+@(]+)")
 
 
 # ============================================================================
@@ -172,9 +175,7 @@ class DeadlockAnalyzer:
             )
 
         # Build wait graph: tid → waiting_for (mutex addr or None)
-        wait_graph: dict[int, int | None] = {
-            dt.tid: dt.waiting_for for dt in blocked
-        }
+        wait_graph: dict[int, int | None] = {dt.tid: dt.waiting_for for dt in blocked}
 
         cycles = _find_cycles(wait_graph)
 
@@ -185,11 +186,13 @@ class DeadlockAnalyzer:
         for cycle_tids in cycles:
             level = _cycle_evidence_level(cycle_tids, tid_to_dt)
             desc = _cycle_description(cycle_tids, tid_to_dt)
-            cycle_objs.append(DeadlockCycle(
-                tids=cycle_tids,
-                evidence_level=level,
-                description=desc,
-            ))
+            cycle_objs.append(
+                DeadlockCycle(
+                    tids=cycle_tids,
+                    evidence_level=level,
+                    description=desc,
+                )
+            )
 
         # Threads not in any cycle but still blocked
         cycle_tid_set: set[int] = {tid for c in cycles for tid in c}
@@ -199,18 +202,20 @@ class DeadlockAnalyzer:
         if not cycle_objs and len(blocked) >= 2:
             tids = [dt.tid for dt in blocked]
             desc = _cycle_description(tids, tid_to_dt)
-            cycle_objs.append(DeadlockCycle(
-                tids=tids,
-                evidence_level="possible",
-                description=f"Multiple blocked threads (no confirmed cycle): {desc}",
-            ))
+            cycle_objs.append(
+                DeadlockCycle(
+                    tids=tids,
+                    evidence_level="possible",
+                    description=f"Multiple blocked threads (no confirmed cycle): {desc}",
+                )
+            )
             suspected = []
 
         # Overall evidence level = strongest cycle
         _ORDER = {"certain": 3, "probable": 2, "possible": 1, "none": 0}
         max_level = max(
             (c.evidence_level for c in cycle_objs),
-            key=lambda l: _ORDER.get(l, 0),
+            key=lambda level: _ORDER.get(level, 0),
             default="none",
         )
 
@@ -251,7 +256,9 @@ class DeadlockAnalyzer:
                 wait_owner[tid] = entry.owner_tid
 
         if not blocked:
-            return DeadlockReport(evidence_level="none", summary="No blocked threads in lock state.")
+            return DeadlockReport(
+                evidence_level="none", summary="No blocked threads in lock state."
+            )
 
         # Detect cycles in wait_owner graph using DFS
         cycles: list[list[int]] = _find_cycles_ownership(wait_owner)
@@ -267,10 +274,10 @@ class DeadlockAnalyzer:
             parts = []
             for i, tid in enumerate(cycle_tids):
                 e = entry_map.get(tid)
-                dt = tid_to_dt.get(tid)
+                cycle_thread = tid_to_dt.get(tid)
                 label = f"TID {tid}"
-                if dt and dt.name:
-                    label += f" ({dt.name})"
+                if cycle_thread and cycle_thread.name:
+                    label += f" ({cycle_thread.name})"
                 if e:
                     sym = e.lock_symbol or (hex(e.waiting_for_addr) if e.waiting_for_addr else "?")
                     label += f" waits {sym}"
@@ -278,26 +285,32 @@ class DeadlockAnalyzer:
                         label += f" (held by TID {e.owner_tid})"
                 parts.append(label)
             desc = " → ".join(parts) + (f" → TID {cycle_tids[0]}" if len(cycle_tids) > 1 else "")
-            cycle_objs.append(DeadlockCycle(
-                tids=cycle_tids,
-                evidence_level="certain",
-                description=desc,
-            ))
+            cycle_objs.append(
+                DeadlockCycle(
+                    tids=cycle_tids,
+                    evidence_level="certain",
+                    description=desc,
+                )
+            )
 
         suspected = [dt for dt in blocked if dt.tid not in cycle_tid_set]
 
         # Threads with unknown owner → possible deadlock among themselves
         if not cycle_objs and len(blocked) >= 2:
             tids = [dt.tid for dt in blocked]
-            cycle_objs.append(DeadlockCycle(
-                tids=tids,
-                evidence_level="probable",
-                description=_cycle_description(tids, tid_to_dt),
-            ))
+            cycle_objs.append(
+                DeadlockCycle(
+                    tids=tids,
+                    evidence_level="probable",
+                    description=_cycle_description(tids, tid_to_dt),
+                )
+            )
             suspected = []
 
-        max_level = "certain" if cycle_objs and any(c.evidence_level == "certain" for c in cycle_objs) else (
-            "probable" if cycle_objs else "none"
+        max_level = (
+            "certain"
+            if cycle_objs and any(c.evidence_level == "certain" for c in cycle_objs)
+            else ("probable" if cycle_objs else "none")
         )
         summary = _build_summary(cycle_objs, suspected, max_level)
 
@@ -516,7 +529,7 @@ def _cycle_evidence_level(tids: list[int], tid_map: dict[int, DeadlockThread]) -
         return "possible"
     # Level is the weakest link
     _ORDER = {"certain": 3, "probable": 2, "possible": 1}
-    return min(levels, key=lambda l: _ORDER.get(l, 0))
+    return min(levels, key=lambda level: _ORDER.get(level, 0))
 
 
 def _cycle_description(tids: list[int], tid_map: dict[int, DeadlockThread]) -> str:
@@ -541,15 +554,12 @@ def _build_summary(
 ) -> str:
     lines = []
     if cycles:
-        lines.append(
-            f"Detected {len(cycles)} deadlock cycle(s) — evidence: {level}."
-        )
+        lines.append(f"Detected {len(cycles)} deadlock cycle(s) — evidence: {level}.")
         for i, c in enumerate(cycles, 1):
             lines.append(f"  Cycle {i}: {c.description}")
     if suspected:
         names = ", ".join(
-            f"TID {dt.tid}" + (f" ({dt.name})" if dt.name else "")
-            for dt in suspected
+            f"TID {dt.tid}" + (f" ({dt.name})" if dt.name else "") for dt in suspected
         )
         lines.append(f"Suspected blocked (no confirmed cycle): {names}")
     return "\n".join(lines)

@@ -9,6 +9,7 @@ Includes comprehensive error handling and validation (Phase 2 hardening).
 import asyncio
 import logging
 import re
+from collections import OrderedDict
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,9 +60,28 @@ class ProcessDatabase:
         # Default: 32 concurrent processes, but respects config override
         self.subprocess_sem = asyncio.Semaphore(config.max_subprocess_workers)
 
-        # Symbol resolution cache: {(binary_path, offset): "symbol_name"}
+        # Symbol resolution cache: key -> (symbol, source file, source line)
         # Avoids repeated subprocess calls for same symbol
-        self.symbol_cache: dict[tuple[str, int], str] = {}
+        self.symbol_cache: OrderedDict[tuple[str, int], tuple[str, str | None, int | None]] = (
+            OrderedDict()
+        )
+
+    def _cache_symbol(
+        self,
+        key: tuple[str, int],
+        value: tuple[str, str | None, int | None],
+    ) -> None:
+        """Add one complete symbol result and enforce the configured LRU bound."""
+        if self.config.max_symbol_cache_size <= 0:
+            return
+        self.symbol_cache[key] = value
+        self.symbol_cache.move_to_end(key)
+        while len(self.symbol_cache) > self.config.max_symbol_cache_size:
+            self.symbol_cache.popitem(last=False)
+            logger.debug(
+                "symbol_cache_evicted",
+                extra={"cache_size": len(self.symbol_cache)},
+            )
 
     async def load_maps(
         self,
@@ -73,8 +93,6 @@ class ProcessDatabase:
     ) -> ProcessSnapshot:
         """
         Parse /proc/PID/maps and create ProcessSnapshot with MemoryMappings.
-
-        CPU-bound parsing is offloaded to thread pool to avoid blocking event loop.
 
         Args:
             pid: Process ID (can be None for offline analysis)
@@ -112,9 +130,9 @@ class ProcessDatabase:
                 tag=tag,
             )
 
-            # Parse maps lines in thread pool (CPU-bound regex)
+            # Parsing the bounded /proc maps input is cheap enough to do inline.
             lines = maps_text.strip().split("\n")
-            parsed_maps = await asyncio.to_thread(self._parse_maps_lines, lines)
+            parsed_maps = self._parse_maps_lines(lines)
 
             if not parsed_maps:
                 logger.warning(
@@ -157,6 +175,8 @@ class ProcessDatabase:
             session.add(process)
             await session.commit()
             process_id = process.id
+            if process_id is None:
+                raise RuntimeError("Process snapshot was not assigned an ID")
 
             logger.info(
                 "maps_loaded",
@@ -174,17 +194,20 @@ class ProcessDatabase:
             statement = (
                 select(ProcessSnapshot)
                 .where(ProcessSnapshot.id == process_id)
-                .options(selectinload(ProcessSnapshot.mappings))
+                .options(selectinload(ProcessSnapshot.mappings))  # type: ignore[arg-type]
             )
             result = await session.execute(statement)  # type: ignore
-            process = result.scalars().first()
+            loaded_process = result.scalars().first()
+
+        if loaded_process is None:
+            raise RuntimeError(f"Process snapshot disappeared: id={process_id}")
 
         # Load thread info from /proc/PID/task/ if pid is available
         if pid is not None:
-            await self._load_threads(process_id, pid, process.mappings)
+            await self._load_threads(process_id, pid, loaded_process.mappings)
 
-        await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
-        return process
+        await self._link_binaries(loaded_process, rootfs=rootfs, debugfs=debugfs)
+        return loaded_process
 
     async def _load_threads(
         self,
@@ -257,15 +280,17 @@ class ProcessDatabase:
             stack_start = stack_range[0] if stack_range else None
             stack_end = stack_range[1] if stack_range else None
 
-            threads.append(Thread(
-                process_id=process_id,
-                tid=tid,
-                name=name,
-                wchan=wchan,
-                syscall=syscall,
-                stack_start=stack_start,
-                stack_end=stack_end,
-            ))
+            threads.append(
+                Thread(
+                    process_id=process_id,
+                    tid=tid,
+                    name=name,
+                    wchan=wchan,
+                    syscall=syscall,
+                    stack_start=stack_start,
+                    stack_end=stack_end,
+                )
+            )
 
         if not threads:
             return
@@ -275,11 +300,12 @@ class ProcessDatabase:
                 session.add(t)
             await session.commit()
 
-        logger.info("threads_loaded", extra={"pid": pid, "thread_count": len(threads), "process_id": process_id})
+        logger.info(
+            "threads_loaded",
+            extra={"pid": pid, "thread_count": len(threads), "process_id": process_id},
+        )
 
-    async def address_to_binary(
-        self, pid: int, addr: int
-    ) -> tuple[str, int, int | None] | None:
+    async def address_to_binary(self, pid: int, addr: int) -> tuple[str, int, int | None] | None:
         """
         Resolve an address to its binary path, offset within binary, and binary_id.
 
@@ -321,9 +347,7 @@ class ProcessDatabase:
             offset = addr - mapping.start_addr + mapping.offset
 
             # Look up binary_id from ProcessBinary for this mapping
-            pb_stmt = select(ProcessBinary).where(
-                ProcessBinary.mapping_id == mapping.id
-            )
+            pb_stmt = select(ProcessBinary).where(ProcessBinary.mapping_id == mapping.id)
             pb_result = await session.execute(pb_stmt)  # type: ignore
             pb = pb_result.scalars().first()
             binary_id = pb.binary_id if pb else None
@@ -456,7 +480,9 @@ class ProcessDatabase:
         binary_path, offset, binary_id = binary_info
 
         # Resolve symbol (with caching and semaphore limiting)
-        symbol, source_file, source_line = await self._get_cached_symbol(binary_path, offset, binary_id)
+        symbol, source_file, source_line = await self._get_cached_symbol(
+            binary_path, offset, binary_id
+        )
 
         return ResolvedFrame(
             address=addr,
@@ -489,32 +515,39 @@ class ProcessDatabase:
         """
         cache_key = (binary_path, offset)
 
-        # Tier 1: in-memory cache (fastest) — stores symbol string only
+        # Tier 1: in-memory cache (fastest)
         if cache_key in self.symbol_cache:
-            logger.debug("symbol_cache_hit_memory", extra={"binary_path": binary_path, "offset": offset})
-            return self.symbol_cache[cache_key], None, None
+            logger.debug(
+                "symbol_cache_hit_memory", extra={"binary_path": binary_path, "offset": offset}
+            )
+            self.symbol_cache.move_to_end(cache_key)
+            return self.symbol_cache[cache_key]
 
         # Tier 2: SQLite persistent cache
         if binary_id is not None:
             async with self.manager.get_session() as session:
                 stmt = select(SymbolCache).where(
-                    (SymbolCache.binary_id == binary_id)
-                    & (SymbolCache.offset == offset)
+                    (SymbolCache.binary_id == binary_id) & (SymbolCache.offset == offset)
                 )
                 result = await session.execute(stmt)  # type: ignore
                 cached = result.scalars().first()
                 if cached is not None:
                     symbol = cached.symbol or "???"
-                    logger.debug("symbol_cache_hit_db", extra={"binary_path": binary_path, "offset": offset})
-                    self.symbol_cache[cache_key] = symbol
-                    return symbol, cached.source_file, cached.source_line
+                    logger.debug(
+                        "symbol_cache_hit_db", extra={"binary_path": binary_path, "offset": offset}
+                    )
+                    value = (symbol, cached.source_file, cached.source_line)
+                    self._cache_symbol(cache_key, value)
+                    return value
 
         # Tier 3: subprocess resolution
         from blackadder.binutils.resolver import resolve_symbol_full
 
         try:
             async with self.subprocess_sem:
-                symbol, src_file, src_line = await resolve_symbol_full(binary_path, offset, self.config)
+                symbol, src_file, src_line = await resolve_symbol_full(
+                    binary_path, offset, self.config
+                )
         except Exception as e:
             logger.warning(
                 "symbol_resolution_failed",
@@ -522,19 +555,15 @@ class ProcessDatabase:
             )
             return "???", None, None
 
-        # Persist to SQLite (fire-and-forget, don't block caller)
+        # Persistence is part of the operation so failures stay observable.
         if binary_id is not None:
-            asyncio.ensure_future(
-                self._persist_symbol_cache(binary_id, offset, symbol, src_file, src_line)
-            )
+            await self._persist_symbol_cache(binary_id, offset, symbol, src_file, src_line)
 
-        # Store in in-memory cache with FIFO eviction
-        if len(self.symbol_cache) > self.config.max_symbol_cache_size:
-            self.symbol_cache.pop(next(iter(self.symbol_cache)))
-            logger.debug("symbol_cache_evicted", extra={"cache_size": len(self.symbol_cache)})
-
-        self.symbol_cache[cache_key] = symbol
-        logger.debug("symbol_resolved", extra={"binary_path": binary_path, "offset": offset, "symbol": symbol})
+        self._cache_symbol(cache_key, (symbol, src_file, src_line))
+        logger.debug(
+            "symbol_resolved",
+            extra={"binary_path": binary_path, "offset": offset, "symbol": symbol},
+        )
         return symbol, src_file, src_line
 
     async def _persist_symbol_cache(
@@ -546,26 +575,22 @@ class ProcessDatabase:
         source_line: int | None = None,
     ) -> None:
         """Persist a resolved symbol to the SQLite SymbolCache table (INSERT OR IGNORE)."""
-        try:
-            async with self.manager.get_session() as session:
-                stmt = select(SymbolCache).where(
-                    (SymbolCache.binary_id == binary_id)
-                    & (SymbolCache.offset == offset)
+        async with self.manager.get_session() as session:
+            stmt = select(SymbolCache).where(
+                (SymbolCache.binary_id == binary_id) & (SymbolCache.offset == offset)
+            )
+            result = await session.execute(stmt)  # type: ignore
+            existing = result.scalars().first()
+            if existing is None:
+                entry = SymbolCache(
+                    binary_id=binary_id,
+                    offset=offset,
+                    symbol=symbol,
+                    source_file=source_file,
+                    source_line=source_line,
                 )
-                result = await session.execute(stmt)  # type: ignore
-                existing = result.scalars().first()
-                if existing is None:
-                    entry = SymbolCache(
-                        binary_id=binary_id,
-                        offset=offset,
-                        symbol=symbol,
-                        source_file=source_file,
-                        source_line=source_line,
-                    )
-                    session.add(entry)
-                    await session.commit()
-        except Exception as e:
-            logger.debug("symbol_cache_persist_failed", extra={"binary_id": binary_id, "offset": offset, "error": str(e)})
+                session.add(entry)
+                await session.commit()
 
     async def load_gdb_dump(self, process_id: int, gdb_text: str) -> int:
         """
@@ -597,8 +622,7 @@ class ProcessDatabase:
             for gdb_thread in dump.threads:
                 # Find existing Thread by TID or create new one
                 existing_stmt = select(Thread).where(
-                    (Thread.process_id == process_id)
-                    & (Thread.tid == gdb_thread.tid)
+                    (Thread.process_id == process_id) & (Thread.tid == gdb_thread.tid)
                 )
                 result = await session.execute(existing_stmt)  # type: ignore
                 thread = result.scalars().first()
@@ -634,6 +658,7 @@ class ProcessDatabase:
                 # the special key "__crash_insn__" in the same JSON blob.
                 if gdb_thread.registers or gdb_thread.crash_instruction:
                     import json
+
                     reg_data: dict = dict(gdb_thread.registers)
                     if gdb_thread.crash_instruction:
                         reg_data["__crash_insn__"] = gdb_thread.crash_instruction  # type: ignore[assignment]
@@ -656,7 +681,9 @@ class ProcessDatabase:
         """Return the most recently created ProcessSnapshot (highest id), or None if empty."""
         async with self.manager.get_session() as session:
             result = await session.execute(  # type: ignore
-                select(ProcessSnapshot).order_by(ProcessSnapshot.id.desc()).limit(1)
+                select(ProcessSnapshot)
+                .order_by(ProcessSnapshot.id.desc())  # type: ignore[union-attr]
+                .limit(1)
             )
             return result.scalars().first()
 
@@ -683,7 +710,7 @@ class ProcessDatabase:
             ProcessNotFoundError: snapshot_id given but not found in DB
             DatabaseConstraintError: tag belongs to a different snapshot than snapshot_id
         """
-        from blackadder.exceptions import ProcessNotFoundError, DatabaseConstraintError
+        from blackadder.exceptions import DatabaseConstraintError, ProcessNotFoundError
 
         async with self.manager.get_session() as session:
             if snapshot_id is not None:
@@ -696,9 +723,15 @@ class ProcessDatabase:
 
                 if tag is not None and snap.tag != tag:
                     # Check if the tag is already claimed by another snapshot
-                    other = (await session.execute(  # type: ignore
-                        select(ProcessSnapshot).where(ProcessSnapshot.tag == tag)
-                    )).scalars().first()
+                    other = (
+                        (
+                            await session.execute(  # type: ignore
+                                select(ProcessSnapshot).where(ProcessSnapshot.tag == tag)
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
                     if other is not None and other.id != snapshot_id:
                         raise DatabaseConstraintError(
                             f"Tag {tag!r} already assigned to snapshot {other.id}, not {snapshot_id}. "
@@ -755,6 +788,7 @@ class ProcessDatabase:
             Updated ProcessSnapshot (re-fetched with mappings eagerly loaded)
         """
         import json
+
         from blackadder.exceptions import ProcessNotFoundError
 
         process_id = snapshot.id
@@ -774,12 +808,18 @@ class ProcessDatabase:
             if new_tag is not None and snap.tag != new_tag:
                 if force_tag:
                     # Clear tag from the current owner if it's a different snapshot
-                    other = (await session.execute(  # type: ignore
-                        select(ProcessSnapshot).where(
-                            (ProcessSnapshot.tag == new_tag)
-                            & (ProcessSnapshot.id != process_id)
+                    other = (
+                        (
+                            await session.execute(  # type: ignore
+                                select(ProcessSnapshot).where(
+                                    (ProcessSnapshot.tag == new_tag)
+                                    & (ProcessSnapshot.id != process_id)
+                                )
+                            )
                         )
-                    )).scalars().first()
+                        .scalars()
+                        .first()
+                    )
                     if other is not None:
                         other.tag = None
                         session.add(other)
@@ -790,9 +830,7 @@ class ProcessDatabase:
             if maps_text or core_path:
                 # Collect existing start_addrs for dedup
                 existing_addrs_result = await session.execute(  # type: ignore
-                    select(MemoryMapping.start_addr).where(
-                        MemoryMapping.process_id == process_id
-                    )
+                    select(MemoryMapping.start_addr).where(MemoryMapping.process_id == process_id)
                 )
                 existing_addrs: set[int] = set(existing_addrs_result.scalars().all())
 
@@ -802,10 +840,11 @@ class ProcessDatabase:
 
                 if maps_text:
                     lines = maps_text.strip().split("\n")
-                    parsed_maps = await asyncio.to_thread(self._parse_maps_lines, lines)
+                    parsed_maps = self._parse_maps_lines(lines)
                     src_type = "maps"
                 elif core_path:
                     from blackadder.binutils.coredump import CoreDumpParser
+
                     parser = CoreDumpParser(self.config)
                     core_result = await parser.parse_core_dump(core_path)
                     if core_result.status == "success":
@@ -816,6 +855,8 @@ class ProcessDatabase:
                 added = 0
                 for map_data in parsed_maps:
                     addr = map_data.get("start_addr")
+                    if not isinstance(addr, int):
+                        continue
                     if addr in existing_addrs:
                         continue
                     try:
@@ -828,7 +869,9 @@ class ProcessDatabase:
 
                 if added:
                     new_mappings_added = True
-                    logger.info("merge_mappings_added", extra={"process_id": process_id, "count": added})
+                    logger.info(
+                        "merge_mappings_added", extra={"process_id": process_id, "count": added}
+                    )
 
                 entry = {"type": src_type}
                 if src_path:
@@ -847,8 +890,7 @@ class ProcessDatabase:
                     # Find or create Thread by TID
                     thr_result = await session.execute(  # type: ignore
                         select(Thread).where(
-                            (Thread.process_id == process_id)
-                            & (Thread.tid == gdb_thread.tid)
+                            (Thread.process_id == process_id) & (Thread.tid == gdb_thread.tid)
                         )
                     )
                     thread = thr_result.scalars().first()
@@ -861,7 +903,8 @@ class ProcessDatabase:
                     # Fill None fields on existing thread
                     changed = False
                     if gdb_thread.name and not thread.name:
-                        thread.name = gdb_thread.name; changed = True
+                        thread.name = gdb_thread.name
+                        changed = True
                     if changed:
                         session.add(thread)
                         await session.flush()
@@ -878,32 +921,43 @@ class ProcessDatabase:
                     for frame in gdb_thread.frames:
                         if frame.frame_num in existing_frames:
                             continue
-                        session.add(BacktraceEntry(
-                            process_id=process_id,
-                            frame_num=frame.frame_num,
-                            address=frame.address or 0,
-                            resolved_symbol=frame.symbol or "???",
-                            resolved_file=frame.source_file,
-                            resolved_line=frame.source_line,
-                            thread_id=thread.id,
-                        ))
+                        session.add(
+                            BacktraceEntry(
+                                process_id=process_id,
+                                frame_num=frame.frame_num,
+                                address=frame.address or 0,
+                                resolved_symbol=frame.symbol or "???",
+                                resolved_file=frame.source_file,
+                                resolved_line=frame.source_line,
+                                thread_id=thread.id,
+                            )
+                        )
                         existing_frames.add(frame.frame_num)
 
                     # Register state — add only if absent for this thread
                     if gdb_thread.registers:
-                        existing_reg = (await session.execute(  # type: ignore
-                            select(ProcessRegisterState).where(
-                                (ProcessRegisterState.process_id == process_id)
-                                & (ProcessRegisterState.thread_id == thread.id)
+                        existing_reg = (
+                            (
+                                await session.execute(  # type: ignore
+                                    select(ProcessRegisterState).where(
+                                        (ProcessRegisterState.process_id == process_id)
+                                        & (ProcessRegisterState.thread_id == thread.id)
+                                    )
+                                )
                             )
-                        )).scalars().first()
+                            .scalars()
+                            .first()
+                        )
                         if existing_reg is None:
                             import json as _json
-                            session.add(ProcessRegisterState(
-                                process_id=process_id,
-                                thread_id=thread.id,
-                                registers_json=_json.dumps(gdb_thread.registers),
-                            ))
+
+                            session.add(
+                                ProcessRegisterState(
+                                    process_id=process_id,
+                                    thread_id=thread.id,
+                                    registers_json=_json.dumps(gdb_thread.registers),
+                                )
+                            )
 
                 entry = {"type": "gdb_dump"}
                 if entry not in sources:
@@ -922,19 +976,22 @@ class ProcessDatabase:
             result = await session.execute(  # type: ignore
                 select(ProcessSnapshot)
                 .where(ProcessSnapshot.id == process_id)
-                .options(selectinload(ProcessSnapshot.mappings))
+                .options(selectinload(ProcessSnapshot.mappings))  # type: ignore[arg-type]
             )
-            process = result.scalars().first()
+            loaded_process = result.scalars().first()
+
+        if loaded_process is None:
+            raise RuntimeError(f"Process snapshot disappeared: id={process_id}")
 
         # Load /proc threads if pid given (and maps were merged — implies live process)
         if pid is not None and new_mappings_added:
-            await self._load_threads(process_id, pid, process.mappings)
+            await self._load_threads(process_id, pid, loaded_process.mappings)
 
         # Re-link binaries for any new mappings
         if new_mappings_added:
-            await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
+            await self._link_binaries(loaded_process, rootfs=rootfs, debugfs=debugfs)
 
-        return process
+        return loaded_process
 
     async def get_deadlock_report(self, process_id: int, lock_state_text: str | None = None):
         """
@@ -952,8 +1009,8 @@ class ProcessDatabase:
         Returns:
             DeadlockReport dataclass
         """
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
         from blackadder.binutils.gdb_dump import parse_lock_state
+        from blackadder.deadlock_analyzer import DeadlockAnalyzer
 
         async with self.manager.get_session() as session:
             # Load threads
@@ -962,9 +1019,7 @@ class ProcessDatabase:
             threads = thread_result.scalars().all()
 
             # Load backtrace entries per thread
-            bt_stmt = select(BacktraceEntry).where(
-                BacktraceEntry.process_id == process_id
-            )
+            bt_stmt = select(BacktraceEntry).where(BacktraceEntry.process_id == process_id)
             bt_result = await session.execute(bt_stmt)  # type: ignore
             entries = bt_result.scalars().all()
 
@@ -1198,13 +1253,16 @@ class ProcessDatabase:
             statement = (
                 select(ProcessSnapshot)
                 .where(ProcessSnapshot.id == process_id)
-                .options(selectinload(ProcessSnapshot.mappings))
+                .options(selectinload(ProcessSnapshot.mappings))  # type: ignore[arg-type]
             )
             result = await session.execute(statement)  # type: ignore
-            process = result.scalars().first()
+            loaded_process = result.scalars().first()
 
-        await self._link_binaries(process, rootfs=rootfs, debugfs=debugfs)
-        return process
+        if loaded_process is None:
+            raise RuntimeError(f"Process snapshot disappeared: id={process_id}")
+
+        await self._link_binaries(loaded_process, rootfs=rootfs, debugfs=debugfs)
+        return loaded_process
 
     async def _link_binaries(
         self,
@@ -1240,11 +1298,18 @@ class ProcessDatabase:
                 binary_cache[pathname] = None
                 continue
             try:
-                binary, is_new, debug_file = await rootfs_db.load_binary(pathname, rootfs=rootfs, debugfs=debugfs)
+                binary, is_new, debug_file = await rootfs_db.load_binary(
+                    pathname, rootfs=rootfs, debugfs=debugfs
+                )
                 binary_cache[pathname] = binary
                 logger.debug(
                     "binary_linked",
-                    extra={"path": pathname, "binary_id": binary.id, "is_new": is_new, "debug_file": debug_file},
+                    extra={
+                        "path": pathname,
+                        "binary_id": binary.id,
+                        "is_new": is_new,
+                        "debug_file": debug_file,
+                    },
                 )
             except Exception as e:
                 logger.warning("binary_load_failed", extra={"path": pathname, "error": str(e)})
@@ -1264,14 +1329,14 @@ class ProcessDatabase:
                 if existing.scalars().first():
                     continue
 
-                binary = binary_cache.get(pathname)
+                linked_binary = binary_cache.get(pathname)
                 pb = ProcessBinary(
                     process_id=process.id,
-                    binary_id=binary.id if binary else None,
+                    binary_id=linked_binary.id if linked_binary else None,
                     mapping_id=mapping.id,
                     binary_load_addr=mapping.start_addr,
-                    match_score=1.0 if binary else None,
-                    match_method="exact" if binary else None,
+                    match_score=1.0 if linked_binary else None,
+                    match_method="exact" if linked_binary else None,
                 )
                 session.add(pb)
 
@@ -1387,7 +1452,10 @@ class ProcessDatabase:
 
                     # Score matches
                     matches = await BinaryMatcher.find_matches(
-                        fp_result.fingerprints, candidates, rootfs_session, match_threshold
+                        fp_result.fingerprints,
+                        list(candidates),
+                        rootfs_session,
+                        match_threshold,
                     )
 
                     if matches:
@@ -1455,18 +1523,12 @@ class ProcessDatabase:
             r"([r\-][w\-][x\-][ps])\s+"
             r"([0-9a-f]+)\s+"
             r"([0-9a-f]+:[0-9a-f]+)\s+"
-            r"(\d+)\s+"
-            r"(.*)$"
+            r"(\d+)"
+            r"(?:\s+(.*))?$"
         )
 
         parsed = []
         failed_lines = 0
-
-        def to_signed_64bit(val: int) -> int:
-            """Convert unsigned 64-bit value to signed (two's complement)."""
-            if val >= 0x8000000000000000:
-                return val - 0x10000000000000000
-            return val
 
         for idx, line in enumerate(lines):
             line = line.strip()
@@ -1485,13 +1547,13 @@ class ProcessDatabase:
                 continue
 
             try:
-                start_addr = to_signed_64bit(int(m.group(1), 16))
-                end_addr = to_signed_64bit(int(m.group(2), 16))
+                start_addr = int(m.group(1), 16)
+                end_addr = int(m.group(2), 16)
                 perms = m.group(3)
                 offset = int(m.group(4), 16)
                 dev = m.group(5)
                 inode = int(m.group(6))
-                pathname = m.group(7).strip() or "[anonymous]"
+                pathname = (m.group(7) or "").strip() or "[anonymous]"
 
                 # Validate parsed values (from file)
                 if start_addr >= end_addr:

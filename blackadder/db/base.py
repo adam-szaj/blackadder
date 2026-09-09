@@ -11,6 +11,17 @@ from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
+from .migrations import run_migrations
+
+
+def configure_sqlite_connection(dbapi_connection) -> None:
+    """Apply the integrity and performance policy to one SQLite connection."""
+    dbapi_connection.execute("PRAGMA foreign_keys=ON")
+    dbapi_connection.execute("PRAGMA journal_mode=WAL")
+    dbapi_connection.execute("PRAGMA busy_timeout=15000")
+    dbapi_connection.execute("PRAGMA synchronous=NORMAL")
+    dbapi_connection.execute("PRAGMA cache_size=-65536")
+
 
 class AsyncDatabaseManager:
     """
@@ -57,16 +68,11 @@ class AsyncDatabaseManager:
 
         # Enable WAL mode and set busy timeout at the engine level so every
         # connection benefits, not just the first one.
-        from sqlalchemy import event, text
+        from sqlalchemy import event
 
         @event.listens_for(self.engine.sync_engine, "connect")
         def _set_wal(dbapi_conn, _connection_record):
-            dbapi_conn.execute("PRAGMA journal_mode=WAL")
-            dbapi_conn.execute("PRAGMA busy_timeout=15000")  # ms
-            # NORMAL is safe with WAL (data survives crash, only last txn may be lost)
-            # and removes the fsync-per-commit bottleneck of the default FULL mode.
-            dbapi_conn.execute("PRAGMA synchronous=NORMAL")
-            dbapi_conn.execute("PRAGMA cache_size=-65536")  # 64 MB page cache
+            configure_sqlite_connection(dbapi_conn)
 
         # Session factory for creating new async sessions
         self.session_maker = async_sessionmaker(
@@ -105,6 +111,7 @@ class AsyncDatabaseManager:
         Should be called once during initialization.
         """
         async with self.engine.begin() as conn:
+            await conn.run_sync(run_migrations)
             await conn.run_sync(SQLModel.metadata.create_all)
 
     async def drop_all(self) -> None:

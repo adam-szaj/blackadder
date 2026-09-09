@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from blackadder.db import AsyncDatabaseManager
+    from blackadder.models import CanonicalDwarfType
 
 # (byte_offset, field_path, type_name, byte_size, encoding)
 FlatField = tuple[int, str, str, int | None, str | None]
@@ -29,10 +30,11 @@ _COMPOSITE_TAGS = frozenset({"structure_type", "union_type"})
 # ============================================================================
 
 
-async def get_binary_id(manager: "AsyncDatabaseManager", binary_name: str) -> int | None:
+async def get_binary_id(manager: AsyncDatabaseManager, binary_name: str) -> int | None:
     """Return Binary.id for a binary name, or None if not found."""
-    from blackadder.models import Binary
     from sqlmodel import select
+
+    from blackadder.models import Binary
 
     async with manager.get_session() as s:
         result = await s.execute(select(Binary).where(Binary.name == binary_name))
@@ -41,100 +43,114 @@ async def get_binary_id(manager: "AsyncDatabaseManager", binary_name: str) -> in
 
 
 async def get_type_by_name(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     name: str,
     bin_id: int,
 ):
     """Find CanonicalDwarfType by name scoped to a binary."""
-    from blackadder.models import BinaryDwarfRef, CanonicalDwarfType
     from sqlmodel import select
+
+    from blackadder.models import BinaryDwarfRef, CanonicalDwarfType
 
     async with manager.get_session() as s:
         result = await s.execute(
             select(CanonicalDwarfType)
-            .join(BinaryDwarfRef, BinaryDwarfRef.canonical_id == CanonicalDwarfType.id)
-            .where(
-                (BinaryDwarfRef.binary_id == bin_id)
-                & (CanonicalDwarfType.name == name)
+            .join(  # type: ignore[arg-type]
+                BinaryDwarfRef,
+                BinaryDwarfRef.canonical_id == CanonicalDwarfType.id,  # type: ignore[arg-type]
             )
+            .where((BinaryDwarfRef.binary_id == bin_id) & (CanonicalDwarfType.name == name))
             .limit(1)
         )
         return result.scalars().first()
 
 
 async def get_type_by_die(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     die_offset: int,
     bin_id: int,
 ):
     """Resolve die_offset → CanonicalDwarfType via binary_dwarf_ref."""
-    from blackadder.models import BinaryDwarfRef, CanonicalDwarfType
     from sqlmodel import select
+
+    from blackadder.models import BinaryDwarfRef, CanonicalDwarfType
 
     async with manager.get_session() as s:
         result = await s.execute(
             select(CanonicalDwarfType)
-            .join(BinaryDwarfRef, BinaryDwarfRef.canonical_id == CanonicalDwarfType.id)
-            .where(
-                (BinaryDwarfRef.binary_id == bin_id)
-                & (BinaryDwarfRef.die_offset == die_offset)
+            .join(  # type: ignore[arg-type]
+                BinaryDwarfRef,
+                BinaryDwarfRef.canonical_id == CanonicalDwarfType.id,  # type: ignore[arg-type]
             )
+            .where((BinaryDwarfRef.binary_id == bin_id) & (BinaryDwarfRef.die_offset == die_offset))
             .limit(1)
         )
         return result.scalars().first()
 
 
 async def get_type_ref_die(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     die_offset: int,
     bin_id: int,
 ) -> int | None:
     """Get type_ref_die from binary_dwarf_ref (for typedef chain traversal)."""
-    from blackadder.models import BinaryDwarfRef
     from sqlmodel import select
+
+    from blackadder.models import BinaryDwarfRef
 
     async with manager.get_session() as s:
         result = await s.execute(
-            select(BinaryDwarfRef).where(
-                (BinaryDwarfRef.binary_id == bin_id)
-                & (BinaryDwarfRef.die_offset == die_offset)
-            ).limit(1)
+            select(BinaryDwarfRef)
+            .where((BinaryDwarfRef.binary_id == bin_id) & (BinaryDwarfRef.die_offset == die_offset))
+            .limit(1)
         )
         ref = result.scalars().first()
         return ref.type_ref_die if ref else None
 
 
 async def find_die_for_canonical(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     canonical_id: int,
     bin_id: int,
 ) -> int | None:
     """Find any die_offset for a canonical type in a binary (reverse lookup)."""
-    from blackadder.models import BinaryDwarfRef
     from sqlmodel import select
+
+    from blackadder.models import BinaryDwarfRef
 
     async with manager.get_session() as s:
         result = await s.execute(
-            select(BinaryDwarfRef).where(
-                (BinaryDwarfRef.binary_id == bin_id)
-                & (BinaryDwarfRef.canonical_id == canonical_id)
-            ).limit(1)
+            select(BinaryDwarfRef)
+            .where(
+                (BinaryDwarfRef.binary_id == bin_id) & (BinaryDwarfRef.canonical_id == canonical_id)
+            )
+            .limit(1)
         )
         ref = result.scalars().first()
         return ref.die_offset if ref else None
 
 
 async def get_members(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     canonical_type_id: int,
+    bin_id: int,
 ) -> list:
-    """Return DwarfMember list for a canonical type, sorted by byte_offset."""
-    from blackadder.models import DwarfMember
+    """Return members for one canonical type occurrence in one binary."""
     from sqlmodel import select
+
+    from blackadder.models import BinaryDwarfRef, DwarfMember
 
     async with manager.get_session() as s:
         result = await s.execute(
-            select(DwarfMember).where(DwarfMember.canonical_type_id == canonical_type_id)
+            select(DwarfMember)
+            .join(  # type: ignore[arg-type]
+                BinaryDwarfRef,
+                DwarfMember.binary_ref_id == BinaryDwarfRef.id,  # type: ignore[arg-type]
+            )
+            .where(
+                (BinaryDwarfRef.canonical_id == canonical_type_id)
+                & (BinaryDwarfRef.binary_id == bin_id)
+            )
         )
         members = list(result.scalars().all())
     return sorted(members, key=lambda m: m.byte_offset)
@@ -146,7 +162,7 @@ async def get_members(
 
 
 async def resolve_typedef_chain(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     t,
     bin_id: int,
 ):
@@ -179,7 +195,7 @@ async def resolve_typedef_chain(
 
 
 async def flatten(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     t,
     bin_id: int,
     prefix: str = "",
@@ -195,7 +211,7 @@ async def flatten(
     if depth > 12:
         return []
 
-    members = await get_members(manager, t.id)  # type: ignore[arg-type]
+    members = await get_members(manager, t.id, bin_id)  # type: ignore[arg-type]
     rows: list[FlatField] = []
 
     for m in members:
@@ -212,18 +228,24 @@ async def flatten(
 
         if inner.tag in _COMPOSITE_TAGS:
             sub = await flatten(
-                manager, inner, bin_id,
-                prefix=field_path, base=abs_offset, depth=depth + 1,
+                manager,
+                inner,
+                bin_id,
+                prefix=field_path,
+                base=abs_offset,
+                depth=depth + 1,
             )
             rows.extend(sub)
         else:
-            rows.append((
-                abs_offset,
-                field_path,
-                inner.name or inner.tag,
-                inner.byte_size,
-                inner.encoding,
-            ))
+            rows.append(
+                (
+                    abs_offset,
+                    field_path,
+                    inner.name or inner.tag,
+                    inner.byte_size,
+                    inner.encoding,
+                )
+            )
 
     return rows
 
@@ -234,20 +256,22 @@ async def flatten(
 
 
 async def get_variables_for_subprogram(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     subprogram_name: str,
     bin_id: int,
 ) -> list:
     """Return DwarfVariable records for a named subprogram in a binary."""
-    from blackadder.models import DwarfSubprogram, DwarfVariable
     from sqlmodel import select
+
+    from blackadder.models import DwarfSubprogram, DwarfVariable
 
     async with manager.get_session() as s:
         sp_result = await s.execute(
-            select(DwarfSubprogram).where(
-                (DwarfSubprogram.binary_id == bin_id)
-                & (DwarfSubprogram.name == subprogram_name)
-            ).limit(1)
+            select(DwarfSubprogram)
+            .where(
+                (DwarfSubprogram.binary_id == bin_id) & (DwarfSubprogram.name == subprogram_name)
+            )
+            .limit(1)
         )
         sp = sp_result.scalars().first()
         if sp is None:
@@ -259,7 +283,7 @@ async def get_variables_for_subprogram(
 
 
 async def find_local_var_at_fbreg(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     subprogram_name: str,
     bin_id: int,
     fbreg_offset: int,
@@ -272,15 +296,17 @@ async def find_local_var_at_fbreg(
     location_fbreg + type_size > fbreg_offset (if type size known).
     Falls back to exact match if size is unknown.
     """
-    from blackadder.models import CanonicalDwarfType, DwarfSubprogram, DwarfVariable
     from sqlmodel import select
+
+    from blackadder.models import CanonicalDwarfType, DwarfSubprogram, DwarfVariable
 
     async with manager.get_session() as s:
         sp_result = await s.execute(
-            select(DwarfSubprogram).where(
-                (DwarfSubprogram.binary_id == bin_id)
-                & (DwarfSubprogram.name == subprogram_name)
-            ).limit(1)
+            select(DwarfSubprogram)
+            .where(
+                (DwarfSubprogram.binary_id == bin_id) & (DwarfSubprogram.name == subprogram_name)
+            )
+            .limit(1)
         )
         sp = sp_result.scalars().first()
         if sp is None:
@@ -289,8 +315,7 @@ async def find_local_var_at_fbreg(
         # All fbreg variables in this subprogram
         var_result = await s.execute(
             select(DwarfVariable).where(
-                (DwarfVariable.subprogram_id == sp.id)
-                & (DwarfVariable.location_type == "fbreg")
+                (DwarfVariable.subprogram_id == sp.id) & (DwarfVariable.location_type == "fbreg")
             )
         )
         vars_ = list(var_result.scalars().all())
@@ -303,9 +328,7 @@ async def find_local_var_at_fbreg(
         if v.canonical_type_id is not None:
             async with manager.get_session() as s:
                 ct_result = await s.execute(
-                    select(CanonicalDwarfType).where(
-                        CanonicalDwarfType.id == v.canonical_type_id
-                    )
+                    select(CanonicalDwarfType).where(CanonicalDwarfType.id == v.canonical_type_id)
                 )
                 ct = ct_result.scalars().first()
             size = ct.byte_size if ct and ct.byte_size else 1
@@ -320,10 +343,10 @@ async def find_local_var_at_fbreg(
 
 
 async def resolve_and_flatten(
-    manager: "AsyncDatabaseManager",
+    manager: AsyncDatabaseManager,
     type_name: str,
     bin_id: int,
-) -> tuple[object, list[FlatField]] | None:
+) -> tuple[CanonicalDwarfType, list[FlatField]] | None:
     """
     Resolve type_name in binary (bin_id), follow typedef chain,
     and flatten to leaf fields.

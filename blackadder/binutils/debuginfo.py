@@ -44,13 +44,13 @@ def find_debug_file(
 
     # Strip rootfs prefix to obtain the target-relative path.
     if binary_abs.startswith(rootfs_abs.rstrip("/") + "/"):
-        target_path = binary_abs[len(rootfs_abs.rstrip("/")):]
+        target_path = binary_abs[len(rootfs_abs.rstrip("/")) :]
     else:
         target_path = binary_abs
 
-    target_dir = str(Path(target_path).parent)    # e.g. /usr/lib
+    target_dir = str(Path(target_path).parent)  # e.g. /usr/lib
     target_parent = str(Path(target_dir).parent)  # e.g. /usr  (<prefix>)
-    binary_name = Path(target_path).name           # e.g. libfoo.so
+    binary_name = Path(target_path).name  # e.g. libfoo.so
 
     candidates: list[str] = []
 

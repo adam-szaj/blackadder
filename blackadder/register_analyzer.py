@@ -12,36 +12,18 @@ Supports x86, x86-64, ARM, ARM64, and RISC-V architectures.
 from __future__ import annotations
 
 from typing import Literal
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from blackadder.arch import Architecture
-from blackadder.models import ProcessSnapshot, MemoryMapping
+from blackadder.models import MemoryMapping, ProcessSnapshot
 
 
 class RegisterInterpretation(BaseModel):
     """Interpretation of a single register value."""
 
-    register_name: str = Field(description="Register name (e.g., 'rax', 'x0')")
-    raw_value: str = Field(description="Hexadecimal value")
-    pointer_type: Literal["code", "heap", "stack", "data", "unknown"] = Field(
-        description="Classification of what the register points to"
-    )
-    resolved_symbol: str | None = Field(
-        default=None, description="Symbol name if code pointer"
-    )
-    region_info: str | None = Field(
-        default=None, description="Memory region info if heap/stack pointer"
-    )
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Confidence score (0.0-1.0)"
-    )
-    notes: list[str] = Field(
-        default_factory=list, description="Explanation of interpretation"
-    )
-
-    class Config:
-        """Pydantic config for JSON serialization."""
-
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "register_name": "rax",
                 "raw_value": "0x10001000",
@@ -52,6 +34,19 @@ class RegisterInterpretation(BaseModel):
                 "notes": ["Points to heap region", "Allocation size: 0x100000 bytes"],
             }
         }
+    )
+
+    register_name: str = Field(description="Register name (e.g., 'rax', 'x0')")
+    raw_value: str = Field(description="Hexadecimal value")
+    pointer_type: Literal["code", "heap", "stack", "data", "unknown"] = Field(
+        description="Classification of what the register points to"
+    )
+    resolved_symbol: str | None = Field(default=None, description="Symbol name if code pointer")
+    region_info: str | None = Field(
+        default=None, description="Memory region info if heap/stack pointer"
+    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score (0.0-1.0)")
+    notes: list[str] = Field(default_factory=list, description="Explanation of interpretation")
 
 
 class RegisterAnalyzer:
@@ -134,7 +129,6 @@ class RegisterAnalyzer:
         Returns:
             RegisterInterpretation with pointer type and context
         """
-        reg_name_lower = reg_name.lower()
         raw_value_hex = f"0x{reg_value:x}"
 
         # Find which region this address falls into
@@ -207,7 +201,7 @@ class RegisterAnalyzer:
                 region_info=f"Heap allocation: {region.start_addr:#x}-{region.end_addr:#x}",
                 confidence=0.85,
                 notes=[
-                    f"Points to heap region",
+                    "Points to heap region",
                     f"Allocation: {region.start_addr:#x}-{region.end_addr:#x}",
                     f"Size: {allocation_size:#x} bytes",
                 ],

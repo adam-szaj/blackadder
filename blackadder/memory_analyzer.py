@@ -100,9 +100,7 @@ class MemoryAnalyzer:
         # Check for stack using architecture-specific detection
         arch = architecture or self.architecture
         if register_state and arch:
-            is_stack, confidence = arch.classify_stack_region(
-                register_state, start_addr, end_addr
-            )
+            is_stack, confidence = arch.classify_stack_region(register_state, start_addr, end_addr)
             if is_stack:
                 return (MemoryRegionType.STACK, confidence)
 

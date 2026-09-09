@@ -4,7 +4,10 @@ Tests for CoreDumpParser module (Phase 2.2 - Core Dump Parsing).
 Tests ELF core dump parsing and memory segment extraction.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
+
 from blackadder.binutils.coredump import CoreDumpParser
 
 
@@ -321,18 +324,31 @@ class TestCoreMapConversion:
 class TestCoreParseIntegration:
     """Integration tests requiring actual binaries and core dumps."""
 
-    async def test_parse_real_core_dump(self, sample_core_dump, config):
-        """Test parsing a real core dump file."""
+    async def test_parse_real_core_dump(self, tmp_path, config):
+        """Test the parser orchestration with deterministic readelf output."""
+        sample_core_dump = tmp_path / "sample.core"
+        sample_core_dump.write_bytes(b"ELF core fixture")
         parser = CoreDumpParser(config)
-        result = await parser.parse_core_dump(sample_core_dump)
+        parser._get_readelf_output = AsyncMock(
+            side_effect=[
+                "Class: ELF64\nData: 2's complement, little endian\nType: CORE (Core file)",
+                """Program Headers:
+  Type           Offset             VirtAddr           PhysAddr
+  LOAD           0x0000000000001000 0x0000000000400000 0x0000000000000000
+                 0x0000000000001000 0x0000000000001000  R E    0x1000
+""",
+            ]
+        )
+
+        result = await parser.parse_core_dump(str(sample_core_dump))
 
         # Should have mappings
-        assert "mappings" in result
-        assert isinstance(result["mappings"], list)
-        assert len(result["mappings"]) > 0
+        assert result.status == "success"
+        assert isinstance(result.mappings, list)
+        assert len(result.mappings) > 0
 
         # Each mapping should have required fields
-        for mapping in result["mappings"]:
+        for mapping in result.mappings:
             assert "start_addr" in mapping
             assert "end_addr" in mapping
             assert "perms" in mapping
@@ -346,5 +362,7 @@ class TestCoreParseIntegration:
         with open(invalid_file, "w") as f:
             f.write("This is not a core dump file")
 
-        with pytest.raises(ValueError):
-            await parser.parse_core_dump(invalid_file)
+        result = await parser.parse_core_dump(invalid_file)
+
+        assert result.status == "parse_error"
+        assert result.mappings == []

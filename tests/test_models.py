@@ -4,18 +4,18 @@ Tests for SQLModel ORM definitions.
 Validates model definitions, relationships, and Pydantic validation.
 """
 
-import pytest
 from datetime import datetime
 
+import pytest
+
+from blackadder.binutils.resolver import parse_backtrace_auto
 from blackadder.models import (
     Binary,
-    SectionHeader,
-    Symbol,
-    ProcessSnapshot,
     MemoryMapping,
+    ProcessSnapshot,
     ResolvedFrame,
+    UInt64,
 )
-from blackadder.binutils.resolver import parse_backtrace_auto
 
 
 def test_resolved_frame_valid():
@@ -81,6 +81,7 @@ def test_process_snapshot_model():
     assert process.description == "Process 12345 crash dump"
     assert process.created_at is not None
     assert isinstance(process.created_at, datetime)
+    assert ProcessSnapshot.register_states.property.uselist is True
 
 
 def test_memory_mapping_model():
@@ -96,6 +97,28 @@ def test_memory_mapping_model():
     assert mapping.start_addr == 0x555555554000
     assert mapping.end_addr == 0x555555575000
     assert mapping.perms == "r-xp"
+
+
+@pytest.mark.parametrize(
+    ("address", "stored"),
+    [
+        (0, 0),
+        (2**63 - 1, 2**63 - 1),
+        (2**63, -(2**63)),
+        (2**64 - 1, -1),
+    ],
+)
+def test_uint64_address_type_round_trip(address, stored):
+    address_type = UInt64()
+
+    assert address_type.process_bind_param(address, None) == stored
+    assert address_type.process_result_value(stored, None) == address
+
+
+@pytest.mark.parametrize("address", [-1, 2**64])
+def test_uint64_address_type_rejects_out_of_range_values(address):
+    with pytest.raises(ValueError, match="unsigned 64-bit"):
+        UInt64().process_bind_param(address, None)
 
 
 @pytest.mark.parametrize(

@@ -7,14 +7,14 @@ Validates stack frame integrity to detect:
 - Invalid frame chains
 """
 
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
-from enum import Enum
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
+
 from blackadder.arch import Architecture
 
 
-class FrameCorruptionType(str, Enum):
+class FrameCorruptionType(StrEnum):
     """Types of frame chain corruption."""
 
     INVALID_POINTER = "invalid_pointer"
@@ -31,16 +31,10 @@ class FrameValidationIssue(BaseModel):
     issue_type: FrameCorruptionType = Field(description="Type of issue detected")
     frame_address: int = Field(description="Address of frame with issue")
     frame_pointer: int = Field(description="Frame pointer value")
-    severity: float = Field(
-        ge=0.0, le=1.0, description="Severity score (0.0-1.0)"
-    )
+    severity: float = Field(ge=0.0, le=1.0, description="Severity score (0.0-1.0)")
     description: str = Field(description="Human-readable description")
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Confidence in detection (0.0-1.0)"
-    )
-    suggested_action: Optional[str] = Field(
-        default=None, description="Suggested remediation"
-    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in detection (0.0-1.0)")
+    suggested_action: str | None = Field(default=None, description="Suggested remediation")
 
 
 class StackFrame(BaseModel):
@@ -48,11 +42,11 @@ class StackFrame(BaseModel):
 
     frame_num: int = Field(description="Frame number in chain (0 = top)")
     frame_pointer: int = Field(description="Frame pointer value")
-    return_address: Optional[int] = Field(default=None, description="Return address")
-    saved_rbp: Optional[int] = Field(default=None, description="Saved RBP value")
+    return_address: int | None = Field(default=None, description="Return address")
+    saved_rbp: int | None = Field(default=None, description="Saved RBP value")
     is_valid: bool = Field(description="Whether frame appears valid")
     size: int = Field(description="Estimated frame size")
-    issues: List[FrameValidationIssue] = Field(
+    issues: list[FrameValidationIssue] = Field(
         default_factory=list, description="Validation issues"
     )
 
@@ -63,21 +57,13 @@ class StackValidationResult(BaseModel):
     total_frames: int = Field(description="Total frames traced")
     valid_frames: int = Field(description="Number of valid frames")
     corrupted_frames: int = Field(description="Number of corrupted frames")
-    frame_chain: List[StackFrame] = Field(
-        default_factory=list, description="Traced frame chain"
-    )
-    issues: List[FrameValidationIssue] = Field(
+    frame_chain: list[StackFrame] = Field(default_factory=list, description="Traced frame chain")
+    issues: list[FrameValidationIssue] = Field(
         default_factory=list, description="All detected issues"
     )
-    chain_integrity: float = Field(
-        ge=0.0, le=1.0, description="Chain integrity score (0.0-1.0)"
-    )
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Overall confidence in validation"
-    )
-    validation_notes: List[str] = Field(
-        default_factory=list, description="Notes about validation"
-    )
+    chain_integrity: float = Field(ge=0.0, le=1.0, description="Chain integrity score (0.0-1.0)")
+    confidence: float = Field(ge=0.0, le=1.0, description="Overall confidence in validation")
+    validation_notes: list[str] = Field(default_factory=list, description="Notes about validation")
 
 
 class StackValidator:
@@ -173,8 +159,8 @@ class StackValidator:
 
     def detect_frame_loops(
         self,
-        frames: List[StackFrame],
-    ) -> List[FrameValidationIssue]:
+        frames: list[StackFrame],
+    ) -> list[FrameValidationIssue]:
         """Detect loops in frame pointer chain.
 
         Args:
@@ -207,8 +193,8 @@ class StackValidator:
 
     def detect_buffer_overflow(
         self,
-        frames: List[StackFrame],
-    ) -> List[FrameValidationIssue]:
+        frames: list[StackFrame],
+    ) -> list[FrameValidationIssue]:
         """Detect potential stack buffer overflow patterns.
 
         Args:
@@ -238,9 +224,9 @@ class StackValidator:
 
     def validate_return_addresses(
         self,
-        frames: List[StackFrame],
-        code_regions: List[Tuple[int, int]],
-    ) -> List[FrameValidationIssue]:
+        frames: list[StackFrame],
+        code_regions: list[tuple[int, int]],
+    ) -> list[FrameValidationIssue]:
         """Validate return addresses point to valid code regions.
 
         Args:
@@ -257,9 +243,7 @@ class StackValidator:
                 continue
 
             # Check if return address is in any valid code region
-            in_valid_code = any(
-                start <= frame.return_address < end for start, end in code_regions
-            )
+            in_valid_code = any(start <= frame.return_address < end for start, end in code_regions)
 
             if not in_valid_code:
                 issues.append(

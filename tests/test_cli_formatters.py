@@ -4,11 +4,13 @@ Tests plain text and JSON formatting for analysis results.
 """
 
 import json
+
 import pytest
+
 from blackadder.cli.formatters import (
-    PlainTextFormatter,
     JSONFormatter,
     OutputFormatter,
+    PlainTextFormatter,
 )
 from blackadder.register_analyzer import RegisterInterpretation
 
@@ -91,9 +93,7 @@ class TestPlainTextFormatter:
 
     def test_format_interesting_registers(self, sample_interpretations):
         """Test filtering and formatting interesting registers."""
-        result = PlainTextFormatter.format_interesting_registers(
-            sample_interpretations
-        )
+        result = PlainTextFormatter.format_interesting_registers(sample_interpretations)
 
         assert "Interesting Registers" in result
         # Should include heap, code, stack but not the unknown r10 (confidence 0.1)

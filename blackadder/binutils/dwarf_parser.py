@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import subprocess as _subprocess
 from collections.abc import AsyncGenerator
 
 from blackadder.binutils.parser import BinToolsParser
@@ -35,24 +36,26 @@ from blackadder.binutils.parser import BinToolsParser
 logger = logging.getLogger("blackadder.dwarf_parser")
 
 # DWARF tags we care about — everything else is skipped
-_INTERESTING_TAGS = frozenset({
-    "structure_type",
-    "union_type",
-    "base_type",
-    "typedef",
-    "pointer_type",
-    "const_type",
-    "volatile_type",
-    "restrict_type",
-    "array_type",
-    "enumeration_type",
-    "member",
-    "subrange_type",
-    # Local variable tracking
-    "subprogram",
-    "variable",
-    "formal_parameter",
-})
+_INTERESTING_TAGS = frozenset(
+    {
+        "structure_type",
+        "union_type",
+        "base_type",
+        "typedef",
+        "pointer_type",
+        "const_type",
+        "volatile_type",
+        "restrict_type",
+        "array_type",
+        "enumeration_type",
+        "member",
+        "subrange_type",
+        # Local variable tracking
+        "subprogram",
+        "variable",
+        "formal_parameter",
+    }
+)
 
 # Tags that introduce a new subprogram scope (push onto subprogram stack)
 _SUBPROGRAM_TAGS = frozenset({"subprogram"})
@@ -83,9 +86,7 @@ _ENCODING_MAP = {
 }
 
 # Regex: DIE header line  <depth><offset>: Abbrev Number: N (DW_TAG_xxx)
-_RE_DIE = re.compile(
-    r"<(\d+)><([0-9a-f]+)>:\s+Abbrev Number:\s+\d+\s+\(DW_TAG_(\w+)\)"
-)
+_RE_DIE = re.compile(r"<(\d+)><([0-9a-f]+)>:\s+Abbrev Number:\s+\d+\s+\(DW_TAG_(\w+)\)")
 
 # Regex: attribute line (various formats)
 _RE_ATTR = re.compile(r"(?:<[0-9a-f]+>\s+)?DW_AT_(\w+)\s*:\s*(.*)", re.IGNORECASE)
@@ -95,7 +96,9 @@ _RE_TYPE_REF = re.compile(r"<0x([0-9a-f]+)>")
 
 # Regex: indirect string value  (indirect string, offset: 0xXXX): NAME
 # Also handles: (alt indirect string, offset: ...) and (GNU_str_index: ...)
-_RE_INDIRECT_STR = re.compile(r"\((?:alt )?(?:indirect (?:string|line string)|GNU_str_index)[^)]*\):\s*(.*)")
+_RE_INDIRECT_STR = re.compile(
+    r"\((?:alt )?(?:indirect (?:string|line string)|GNU_str_index)[^)]*\):\s*(.*)"
+)
 
 # Regex: DW_AT_location fbreg  — matches "(DW_OP_fbreg: -96)" anywhere in the value
 _RE_FBREG = re.compile(r"DW_OP_fbreg:\s*(-?\d+)")
@@ -113,6 +116,7 @@ _RE_LINE_HEADER = re.compile(r"^(/\S+|[^/\s]\S+):$")
 # ============================================================================
 # Attribute value helpers
 # ============================================================================
+
 
 def _parse_attr_value(raw: str) -> str:
     """Extract clean attribute value from raw DW_AT line value."""
@@ -160,6 +164,7 @@ def _parse_encoding(raw: str) -> str | None:
 # Incremental (streaming) parsers
 # ============================================================================
 
+
 def _parse_location(raw: str) -> tuple[str | None, int | None, str | None]:
     """Parse DW_AT_location value into (location_type, fbreg_offset, register_name).
 
@@ -198,14 +203,18 @@ class DwarfTypeParser:
     """
 
     __slots__ = (
-        "_current_die", "_parent_stack", "_subprogram_stack",
-        "_out_types", "_out_members", "_out_vars",
+        "_current_die",
+        "_parent_stack",
+        "_subprogram_stack",
+        "_out_types",
+        "_out_members",
+        "_out_vars",
     )
 
     def __init__(self) -> None:
         self._current_die: dict | None = None
-        self._parent_stack: list[tuple[int, int]] = []       # (depth, die_offset) — struct/union
-        self._subprogram_stack: list[tuple[int, int]] = []   # (depth, die_offset) — subprogram
+        self._parent_stack: list[tuple[int, int]] = []  # (depth, die_offset) — struct/union
+        self._subprogram_stack: list[tuple[int, int]] = []  # (depth, die_offset) — subprogram
         self._out_types: list[dict] = []
         self._out_members: list[dict] = []
         self._out_vars: list[dict] = []
@@ -291,26 +300,30 @@ class DwarfTypeParser:
                     break
             type_ref = die.get("type_ref")
             if parent_offset is not None and "byte_offset" in die and type_ref is not None:
-                self._out_members.append({
-                    "parent_die_offset": parent_offset,
-                    "name": die.get("name"),
-                    "byte_offset": die["byte_offset"],
-                    "member_type_ref": type_ref,
-                })
+                self._out_members.append(
+                    {
+                        "parent_die_offset": parent_offset,
+                        "name": die.get("name"),
+                        "byte_offset": die["byte_offset"],
+                        "member_type_ref": type_ref,
+                    }
+                )
 
         elif tag == "subprogram":
             # Push onto subprogram stack so nested variables know their parent.
             if die_offset is not None:
                 self._subprogram_stack.append((depth, die_offset))
             # Emit as type record so binary_dwarf_ref can map its die_offset.
-            self._out_types.append({
-                "die_offset": die_offset,
-                "tag": tag,
-                "name": die.get("name"),
-                "byte_size": None,
-                "type_ref": None,
-                "encoding": None,
-            })
+            self._out_types.append(
+                {
+                    "die_offset": die_offset,
+                    "tag": tag,
+                    "name": die.get("name"),
+                    "byte_size": None,
+                    "type_ref": None,
+                    "encoding": None,
+                }
+            )
 
         elif tag in _VAR_TAGS:
             # Find innermost enclosing subprogram.
@@ -319,26 +332,30 @@ class DwarfTypeParser:
                 if sdepth < depth:
                     subprog_offset = soffset
                     break
-            self._out_vars.append({
-                "subprogram_die_offset": subprog_offset,
-                "die_offset": die_offset,
-                "tag": tag,
-                "name": die.get("name"),
-                "type_ref": die.get("type_ref"),
-                "location_type": die.get("location_type"),
-                "location_fbreg": die.get("location_fbreg"),
-                "location_register": die.get("location_register"),
-            })
+            self._out_vars.append(
+                {
+                    "subprogram_die_offset": subprog_offset,
+                    "die_offset": die_offset,
+                    "tag": tag,
+                    "name": die.get("name"),
+                    "type_ref": die.get("type_ref"),
+                    "location_type": die.get("location_type"),
+                    "location_fbreg": die.get("location_fbreg"),
+                    "location_register": die.get("location_register"),
+                }
+            )
 
         elif tag in _INTERESTING_TAGS:
-            self._out_types.append({
-                "die_offset": die_offset,
-                "tag": tag,
-                "name": die.get("name"),
-                "byte_size": die.get("byte_size"),
-                "type_ref": die.get("type_ref"),
-                "encoding": die.get("encoding"),
-            })
+            self._out_types.append(
+                {
+                    "die_offset": die_offset,
+                    "tag": tag,
+                    "name": die.get("name"),
+                    "byte_size": die.get("byte_size"),
+                    "type_ref": die.get("type_ref"),
+                    "encoding": die.get("encoding"),
+                }
+            )
             if tag in ("structure_type", "union_type") and die_offset is not None:
                 self._parent_stack.append((depth, die_offset))
 
@@ -382,9 +399,13 @@ class DebugLineParser:
             if line_no_str == "-":
                 return []
             try:
-                return [{"source_file": self._current_file,
-                         "line_number": int(line_no_str),
-                         "address": int(addr_str, 16)}]
+                return [
+                    {
+                        "source_file": self._current_file,
+                        "line_number": int(line_no_str),
+                        "address": int(addr_str, 16),
+                    }
+                ]
             except ValueError:
                 return []
         return []
@@ -395,8 +416,6 @@ class DebugLineParser:
 # These use subprocess.Popen (blocking) so they never touch the event loop.
 # Run via asyncio.to_thread() for true multi-core parallelism.
 # ============================================================================
-
-import subprocess as _subprocess
 
 
 def _sync_parse_dwarf_types(
@@ -476,6 +495,7 @@ def _sync_parse_debug_line(
 # Async streaming generators — kept for single-binary use (load-types command)
 # and tests.  For bulk loads use the thread-based variants in rootfs.py.
 # ============================================================================
+
 
 async def stream_dwarf_types(
     binary_path: str,
@@ -571,6 +591,7 @@ async def stream_debug_line(
 # Batch parsers (kept for tests and load-types command)
 # ============================================================================
 
+
 def parse_dwarf_types_from_text(text: str) -> tuple[list[dict], list[dict], list[dict]]:
     """
     Parse objdump --dwarf=info output into type, member, and variable records.
@@ -594,8 +615,11 @@ def parse_dwarf_types_from_text(text: str) -> tuple[list[dict], list[dict], list
     all_vars.extend(fv)
     logger.debug(
         "dwarf_types_parsed",
-        extra={"type_count": len(all_types), "member_count": len(all_members),
-               "var_count": len(all_vars)},
+        extra={
+            "type_count": len(all_types),
+            "member_count": len(all_members),
+            "var_count": len(all_vars),
+        },
     )
     return all_types, all_members, all_vars
 
@@ -620,7 +644,8 @@ def parse_debug_line_from_text(text: str) -> list[dict]:
 
 
 async def parse_dwarf_types(
-    binary_path: str, config,
+    binary_path: str,
+    config,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Collect all DWARF types/vars from a binary. Thin wrapper over stream_dwarf_types.
 

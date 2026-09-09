@@ -8,13 +8,12 @@ Analyzes heap structure to detect:
 - Allocation anomalies
 """
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple
-from enum import Enum
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
 
 
-class HeapAnomalyType(str, Enum):
+class HeapAnomalyType(StrEnum):
     """Types of heap anomalies detected."""
 
     FREE_LIST_CORRUPTION = "free_list_corruption"
@@ -32,16 +31,10 @@ class HeapAnomaly(BaseModel):
 
     anomaly_type: HeapAnomalyType = Field(description="Type of anomaly detected")
     address: int = Field(description="Address where anomaly detected")
-    severity: float = Field(
-        ge=0.0, le=1.0, description="Severity score (0.0-1.0)"
-    )
+    severity: float = Field(ge=0.0, le=1.0, description="Severity score (0.0-1.0)")
     description: str = Field(description="Human-readable description")
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Confidence in detection (0.0-1.0)"
-    )
-    suggested_action: Optional[str] = Field(
-        default=None, description="Suggested remediation"
-    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence in detection (0.0-1.0)")
+    suggested_action: str | None = Field(default=None, description="Suggested remediation")
 
 
 class HeapAllocation(BaseModel):
@@ -50,10 +43,8 @@ class HeapAllocation(BaseModel):
     address: int = Field(description="Start address of allocation")
     size: int = Field(description="Allocation size in bytes")
     is_free: bool = Field(description="Whether allocation is currently free")
-    allocated_by: Optional[str] = Field(
-        default=None, description="Function that allocated (if known)"
-    )
-    freed_by: Optional[str] = Field(default=None, description="Function that freed")
+    allocated_by: str | None = Field(default=None, description="Function that allocated (if known)")
+    freed_by: str | None = Field(default=None, description="Function that freed")
     in_use: bool = Field(description="Whether allocation appears in-use")
     metadata_valid: bool = Field(description="Whether metadata appears valid")
 
@@ -66,12 +57,8 @@ class HeapSegment(BaseModel):
     size: int = Field(description="Total segment size")
     allocations: int = Field(description="Number of allocations in segment")
     free_chunks: int = Field(description="Number of free chunks")
-    fragmentation_ratio: float = Field(
-        ge=0.0, le=1.0, description="Fragmentation ratio (0.0-1.0)"
-    )
-    anomalies: List[HeapAnomaly] = Field(
-        default_factory=list, description="Detected anomalies"
-    )
+    fragmentation_ratio: float = Field(ge=0.0, le=1.0, description="Fragmentation ratio (0.0-1.0)")
+    anomalies: list[HeapAnomaly] = Field(default_factory=list, description="Detected anomalies")
 
 
 class HeapAnalysisResult(BaseModel):
@@ -81,22 +68,14 @@ class HeapAnalysisResult(BaseModel):
     total_size: int = Field(description="Total heap size in bytes")
     free_size: int = Field(description="Total free space in bytes")
     allocated_size: int = Field(description="Total allocated space in bytes")
-    fragmentation_ratio: float = Field(
-        ge=0.0, le=1.0, description="Overall fragmentation ratio"
-    )
-    segments: List[HeapSegment] = Field(
-        default_factory=list, description="Heap segments analyzed"
-    )
-    anomalies: List[HeapAnomaly] = Field(
-        default_factory=list, description="All detected anomalies"
-    )
-    high_risk_anomalies: List[HeapAnomaly] = Field(
+    fragmentation_ratio: float = Field(ge=0.0, le=1.0, description="Overall fragmentation ratio")
+    segments: list[HeapSegment] = Field(default_factory=list, description="Heap segments analyzed")
+    anomalies: list[HeapAnomaly] = Field(default_factory=list, description="All detected anomalies")
+    high_risk_anomalies: list[HeapAnomaly] = Field(
         default_factory=list, description="High-severity anomalies"
     )
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Overall confidence in analysis"
-    )
-    analysis_notes: List[str] = Field(
+    confidence: float = Field(ge=0.0, le=1.0, description="Overall confidence in analysis")
+    analysis_notes: list[str] = Field(
         default_factory=list, description="Notes about analysis limitations"
     )
 
@@ -166,8 +145,8 @@ class HeapAnalyzer:
 
     def detect_buffer_overflow(
         self,
-        allocations: List[HeapAllocation],
-    ) -> List[HeapAnomaly]:
+        allocations: list[HeapAllocation],
+    ) -> list[HeapAnomaly]:
         """Detect potential buffer overflow patterns.
 
         Args:
@@ -176,7 +155,7 @@ class HeapAnalyzer:
         Returns:
             List of detected buffer overflow anomalies
         """
-        anomalies = []
+        anomalies: list[HeapAnomaly] = []
 
         # Check for allocations immediately adjacent to each other
         if len(allocations) < 2:
@@ -209,8 +188,8 @@ class HeapAnalyzer:
 
     def detect_use_after_free(
         self,
-        allocations: List[HeapAllocation],
-    ) -> List[HeapAnomaly]:
+        allocations: list[HeapAllocation],
+    ) -> list[HeapAnomaly]:
         """Detect use-after-free patterns.
 
         Args:
@@ -240,8 +219,8 @@ class HeapAnalyzer:
 
     def detect_double_free(
         self,
-        allocations: List[HeapAllocation],
-    ) -> List[HeapAnomaly]:
+        allocations: list[HeapAllocation],
+    ) -> list[HeapAnomaly]:
         """Detect double-free patterns.
 
         Args:
@@ -253,7 +232,7 @@ class HeapAnalyzer:
         anomalies = []
 
         # Group by address to find duplicates
-        by_address: Dict[int, List[HeapAllocation]] = {}
+        by_address: dict[int, list[HeapAllocation]] = {}
         for alloc in allocations:
             if alloc.address not in by_address:
                 by_address[alloc.address] = []
@@ -279,8 +258,8 @@ class HeapAnalyzer:
 
     def check_metadata_validity(
         self,
-        allocations: List[HeapAllocation],
-    ) -> List[HeapAnomaly]:
+        allocations: list[HeapAllocation],
+    ) -> list[HeapAnomaly]:
         """Check heap metadata for corruption.
 
         Args:
@@ -322,7 +301,7 @@ class HeapAnalyzer:
 
     def calculate_fragmentation(
         self,
-        allocations: List[HeapAllocation],
+        allocations: list[HeapAllocation],
         total_size: int,
     ) -> float:
         """Calculate heap fragmentation ratio.

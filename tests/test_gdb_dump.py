@@ -9,15 +9,10 @@ Covers:
 """
 
 from blackadder.binutils.gdb_dump import (
-    GdbDump,
-    GdbFrame,
-    GdbThread,
-    LockStateEntry,
     parse_gdb_dump,
     parse_gdb_registers_only,
     parse_lock_state,
 )
-
 
 # ============================================================================
 # Fixtures — realistic GDB output snippets
@@ -172,7 +167,7 @@ class TestParseGdbDumpThreads:
     def test_frame_with_address(self):
         dump = parse_gdb_dump(_GDB_WITH_REGISTERS)
         frame = dump.threads[0].frames[0]
-        assert frame.address == 0x00007f001000
+        assert frame.address == 0x00007F001000
         assert frame.symbol == "main"
 
     def test_frame_without_address(self):
@@ -227,8 +222,8 @@ class TestParseGdbDumpRegisters:
         regs = dump.threads[0].registers
         assert "rax" in regs
         assert regs["rax"] == 0x0
-        assert regs["rbx"] == 0x400a1c
-        assert regs["rip"] == 0x400a1c
+        assert regs["rbx"] == 0x400A1C
+        assert regs["rip"] == 0x400A1C
 
     def test_skip_regs_excluded(self):
         dump = parse_gdb_dump(_GDB_WITH_REGISTERS)
@@ -261,7 +256,7 @@ Thread 1 (LWP 100 "test"):
     def test_register_value_hex(self):
         dump = parse_gdb_dump(_GDB_WITH_REGISTERS)
         regs = dump.threads[0].registers
-        assert regs["rsp"] == 0x7fff000
+        assert regs["rsp"] == 0x7FFF000
 
     def test_register_names_lowercased(self):
         text = """\
@@ -288,9 +283,9 @@ class TestParseGdbRegistersOnly:
     def test_x86_64_basic_registers(self):
         regs = parse_gdb_registers_only(_REGISTERS_X86_64)
         assert regs["rax"] == 0x0
-        assert regs["rbx"] == 0x400a1c
-        assert regs["rip"] == 0x400a1c
-        assert regs["rsp"] == 0x7fff0ff0
+        assert regs["rbx"] == 0x400A1C
+        assert regs["rip"] == 0x400A1C
+        assert regs["rsp"] == 0x7FFF0FF0
 
     def test_skip_regs_excluded(self):
         regs = parse_gdb_registers_only(_REGISTERS_X86_64)
@@ -314,9 +309,9 @@ class TestParseGdbRegistersOnly:
     def test_arm64_registers(self):
         regs = parse_gdb_registers_only(_REGISTERS_ARM64)
         assert regs["x0"] == 0
-        assert regs["x1"] == 0x400a1c
-        assert regs["sp"] == 0x7fff0ff0
-        assert regs["pc"] == 0x400a1c
+        assert regs["x1"] == 0x400A1C
+        assert regs["sp"] == 0x7FFF0FF0
+        assert regs["pc"] == 0x400A1C
 
     def test_empty_input(self):
         regs = parse_gdb_registers_only("")
@@ -329,8 +324,25 @@ class TestParseGdbRegistersOnly:
 
     def test_all_gp_registers_present(self):
         regs = parse_gdb_registers_only(_REGISTERS_X86_64)
-        for reg in ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip",
-                    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]:
+        for reg in [
+            "rax",
+            "rbx",
+            "rcx",
+            "rdx",
+            "rsi",
+            "rdi",
+            "rbp",
+            "rsp",
+            "rip",
+            "r8",
+            "r9",
+            "r10",
+            "r11",
+            "r12",
+            "r13",
+            "r14",
+            "r15",
+        ]:
             assert reg in regs, f"Missing register: {reg}"
 
 
@@ -353,7 +365,7 @@ class TestParseLockState:
         assert e.gdb_thread_num == 2
         assert e.blocking_function == "___pthread_mutex_lock"
         assert e.lock_type == "mutex"
-        assert e.waiting_for_addr == 0x7f001234
+        assert e.waiting_for_addr == 0x7F001234
         assert e.lock_symbol == "m1"
         assert e.owner_tid == 1002
         assert e.reader_count == 0
@@ -519,10 +531,24 @@ BALDRICK_LOCK_STATE_END
 
         # Empty lock_state → falls back to normal tier 1/2/3 analysis
         threads = [
-            {"id": 1, "tid": 100, "name": None, "wchan": "futex_wait",
-             "syscall": None, "stack_start": None, "stack_end": None},
-            {"id": 2, "tid": 101, "name": None, "wchan": "futex_wait",
-             "syscall": None, "stack_start": None, "stack_end": None},
+            {
+                "id": 1,
+                "tid": 100,
+                "name": None,
+                "wchan": "futex_wait",
+                "syscall": None,
+                "stack_start": None,
+                "stack_end": None,
+            },
+            {
+                "id": 2,
+                "tid": 101,
+                "name": None,
+                "wchan": "futex_wait",
+                "syscall": None,
+                "stack_start": None,
+                "stack_end": None,
+            },
         ]
         report = DeadlockAnalyzer(threads, {}, lock_state=[]).analyze()
         # Should still detect via wchan (tier 3)
@@ -569,9 +595,10 @@ BALDRICK_LOCK_STATE_END
         assert len(report.cycles) == 1  # all-blocked group
 
     def test_json_serializable(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
-        from dataclasses import asdict
         import json
+        from dataclasses import asdict
+
+        from blackadder.deadlock_analyzer import DeadlockAnalyzer
 
         text = """\
 BALDRICK_LOCK_STATE_BEGIN

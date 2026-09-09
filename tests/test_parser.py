@@ -5,6 +5,7 @@ Tests subprocess execution, semaphore limiting, and output parsing.
 """
 
 import asyncio
+
 import pytest
 
 from blackadder.binutils.parser import BinToolsParser
@@ -31,25 +32,6 @@ async def test_subprocess_semaphore_limits(parser_config):
     """Test that subprocess semaphore limits concurrent executions."""
     parser = BinToolsParser(parser_config)
 
-    # Create mock command that just echoes
-    call_count = 0
-    max_concurrent = 0
-    current_concurrent = 0
-
-    async def counting_command(delay=0.1):
-        nonlocal call_count, max_concurrent, current_concurrent
-        call_count += 1
-        current_concurrent += 1
-        max_concurrent = max(max_concurrent, current_concurrent)
-
-        await asyncio.sleep(delay)
-
-        current_concurrent -= 1
-
-    # With semaphore=2, max concurrent should be 2
-    tasks = [parser.subprocess_sem.__aenter__() for _ in range(5)]
-
-    # This is a simplified test; real test would measure actual subprocess calls
     assert parser.subprocess_sem._value == 2
 
 

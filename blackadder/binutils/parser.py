@@ -9,6 +9,8 @@ import asyncio
 import re
 from collections.abc import Callable
 
+from blackadder.binutils.runner import SubprocessRunner, get_shared_runner
+
 
 class BinToolsParser:
     """
@@ -20,7 +22,7 @@ class BinToolsParser:
     - Configurable resource limits
     """
 
-    def __init__(self, config):
+    def __init__(self, config, runner: SubprocessRunner | None = None):
         """
         Initialize binutils parser with resource limits.
 
@@ -28,10 +30,8 @@ class BinToolsParser:
             config: BlackadderConfig with tool paths and limits
         """
         self.config = config
-
-        # Subprocess limiting semaphore
-        # Default 32 concurrent processes to avoid resource exhaustion
-        self.subprocess_sem = asyncio.Semaphore(config.max_subprocess_workers)
+        self.runner = runner or get_shared_runner(config)
+        self.subprocess_sem = self.runner.semaphore
 
         # Pre-compile regex patterns for symbol/section parsing
         self.symbol_regex = re.compile(
@@ -71,8 +71,7 @@ class BinToolsParser:
         Returns:
             List of all output lines
         """
-        async with self.subprocess_sem:  # Wait if at resource limit
-            return await self._run_command_internal(cmd, on_line)
+        return await self.runner.run(cmd, on_line)
 
     async def _run_command_internal(
         self,
@@ -91,36 +90,7 @@ class BinToolsParser:
         Returns:
             List of all output lines
         """
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            limit=32 * 1024,  # 32KB buffer per stream
-        )
-
-        lines: list[str] = []
-
-        async def read_stream(stream):
-            """Read stream line-by-line, invoke callback if provided."""
-            while True:
-                line = await stream.readline()
-                if not line:
-                    break
-
-                decoded = line.decode("utf-8", errors="replace").strip()
-                lines.append(decoded)
-
-                if on_line:
-                    on_line(decoded)
-
-        # Concurrent stdout + stderr reading (won't block each other)
-        await asyncio.gather(
-            read_stream(proc.stdout),
-            read_stream(proc.stderr),
-        )
-        await proc.wait()
-
-        return lines
+        return await self.runner.run(cmd, on_line)
 
     async def parse_objdump_syms(self, binary_path: str) -> dict[int, str]:
         """

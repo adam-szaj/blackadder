@@ -4,14 +4,26 @@ Tests for FunctionHasher module (Phase 2.1 - Binary Matching).
 Tests fingerprint extraction, normalization, and content hashing.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
+
+from blackadder.arch.x86 import X86_64Architecture
 from blackadder.binutils.hasher import FunctionHasher
 
 
 @pytest.fixture
 def hasher(config):
     """Fixture for FunctionHasher instance."""
-    return FunctionHasher(config)
+    return FunctionHasher(config, X86_64Architecture())
+
+
+@pytest.fixture
+def sample_binary(tmp_path):
+    """Create a readable file; command output is mocked by each test."""
+    binary = tmp_path / "sample.elf"
+    binary.write_bytes(b"ELF")
+    return str(binary)
 
 
 class TestNormalizeFunctionBody:
@@ -25,7 +37,7 @@ class TestNormalizeFunctionBody:
             "jmp    0x401234",
         ]
 
-        normalized = FunctionHasher.normalize_function_body(asm_lines)
+        normalized = hasher.normalize_function_body(asm_lines)
         normalized_text = normalized.decode("utf-8")
 
         # Addresses should be normalized
@@ -41,7 +53,7 @@ class TestNormalizeFunctionBody:
             "add    $1,%rcx    # increment counter",
         ]
 
-        normalized = FunctionHasher.normalize_function_body(asm_lines)
+        normalized = hasher.normalize_function_body(asm_lines)
         normalized_text = normalized.decode("utf-8")
 
         # Comments should be removed
@@ -56,7 +68,7 @@ class TestNormalizeFunctionBody:
             "sub    $256,%rcx",
         ]
 
-        normalized = FunctionHasher.normalize_function_body(asm_lines)
+        normalized = hasher.normalize_function_body(asm_lines)
         normalized_text = normalized.decode("utf-8")
 
         # Immediates should be normalized
@@ -81,8 +93,8 @@ class TestNormalizeFunctionBody:
             "je     0x401600",  # Different address
         ]
 
-        norm1 = FunctionHasher.normalize_function_body(asm_lines_1)
-        norm2 = FunctionHasher.normalize_function_body(asm_lines_2)
+        norm1 = hasher.normalize_function_body(asm_lines_1)
+        norm2 = hasher.normalize_function_body(asm_lines_2)
 
         # Should normalize to same value (addresses don't matter)
         assert norm1 == norm2
@@ -99,11 +111,12 @@ class TestNormalizeFunctionBody:
             "add    %rdx,%rcx",  # Swapped
         ]
 
-        norm1 = FunctionHasher.normalize_function_body(asm_lines_1)
-        norm2 = FunctionHasher.normalize_function_body(asm_lines_2)
+        norm1 = hasher.normalize_function_body(asm_lines_1)
+        norm2 = hasher.normalize_function_body(asm_lines_2)
 
         # Different register usage should NOT normalize to same
         # (this is intentional - register differences matter)
+        assert norm1 != norm2
         # But specific register names should be replaced
         assert "%rax" not in norm1.decode("utf-8")
         assert "%rbx" not in norm1.decode("utf-8")
@@ -117,11 +130,11 @@ class TestNormalizeFunctionBody:
             "   ",  # Whitespace
         ]
 
-        normalized = FunctionHasher.normalize_function_body(asm_lines)
+        normalized = hasher.normalize_function_body(asm_lines)
         normalized_text = normalized.decode("utf-8")
 
         # Should have only 2 instructions
-        lines = [l for l in normalized_text.split("\n") if l.strip()]
+        lines = [line for line in normalized_text.split("\n") if line.strip()]
         assert len(lines) == 2
 
 
@@ -183,14 +196,22 @@ class TestComputeFingerprints:
     @pytest.mark.requires_tools
     async def test_compute_fingerprints_returns_dict(self, hasher, sample_binary):
         """Test that compute_fingerprints returns function fingerprints."""
-        fingerprints = await hasher.compute_fingerprints(sample_binary)
+        hasher._extract_function_info = AsyncMock(
+            return_value={"main": {"address": 0x1000, "size": 2}}
+        )
+        hasher._get_disassembly = AsyncMock(return_value="1000 <main>:\n1000: 90 nop\n1001: c3 ret")
+        result = await hasher.compute_fingerprints(sample_binary)
 
-        # Should return a dict (may be empty if no symbols)
-        assert isinstance(fingerprints, dict)
+        assert result.status == "success"
+        assert isinstance(result.fingerprints, dict)
 
     @pytest.mark.requires_tools
     async def test_compute_fingerprints_hashes_consistent(self, hasher, sample_binary):
         """Test that fingerprints are consistent for same binary."""
+        hasher._extract_function_info = AsyncMock(
+            return_value={"main": {"address": 0x1000, "size": 2}}
+        )
+        hasher._get_disassembly = AsyncMock(return_value="1000 <main>:\n1000: 90 nop\n1001: c3 ret")
         fps1 = await hasher.compute_fingerprints(sample_binary)
         fps2 = await hasher.compute_fingerprints(sample_binary)
 
@@ -200,11 +221,10 @@ class TestComputeFingerprints:
     @pytest.mark.requires_tools
     async def test_compute_fingerprints_handles_missing_file(self, hasher):
         """Test that missing file returns empty dict gracefully."""
-        fingerprints = await hasher.compute_fingerprints("/nonexistent/binary")
+        result = await hasher.compute_fingerprints("/nonexistent/binary")
 
-        # Should handle missing file gracefully
-        assert isinstance(fingerprints, dict)
-        assert len(fingerprints) == 0
+        assert result.status == "file_not_found"
+        assert result.fingerprints == {}
 
 
 class TestFingerprintMatching:

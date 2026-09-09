@@ -5,14 +5,9 @@ Built-in named SQL queries plus user-defined queries from ~/.baldrick.toml
 and ./baldrick.toml (local overrides global).
 """
 
-import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib  # type: ignore[no-redef]
 
 
 @dataclass
@@ -21,6 +16,7 @@ class QueryDef:
     sql: str
     description: str
     params: list[str] = field(default_factory=list)
+    address_params: list[str] = field(default_factory=list)
 
 
 # ============================================================================
@@ -142,7 +138,7 @@ BUILTIN_QUERIES: list[QueryDef] = [
         sql=(
             "SELECT t.tid, t.name, t.wchan, t.syscall, COUNT(b.id) AS frame_count "
             "FROM thread t "
-            "LEFT JOIN backtrace_entry b ON b.thread_id = t.id "
+            "LEFT JOIN backtraceentry b ON b.thread_id = t.id "
             "WHERE t.process_id = :id "
             "  AND (t.wchan LIKE '%futex%' OR t.wchan LIKE '%mutex%' OR t.syscall LIKE '202 %' OR t.syscall LIKE '240 %' OR t.syscall LIKE '98 %') "
             "GROUP BY t.id "
@@ -167,8 +163,8 @@ BUILTIN_QUERIES: list[QueryDef] = [
         sql=(
             "SELECT ct.name, ct.tag, ct.byte_size, COUNT(m.id) AS field_count "
             "FROM canonical_dwarf_type ct "
-            "LEFT JOIN dwarfmember m ON m.canonical_type_id = ct.id "
             "JOIN binary_dwarf_ref r ON r.canonical_id = ct.id "
+            "LEFT JOIN dwarfmember m ON m.binary_ref_id = r.id "
             "JOIN binary b ON b.id = r.binary_id "
             "WHERE b.name = :binary AND ct.tag IN ('structure_type','union_type') "
             "GROUP BY ct.id ORDER BY ct.name"
@@ -181,8 +177,8 @@ BUILTIN_QUERIES: list[QueryDef] = [
         sql=(
             "SELECT m.byte_offset, m.name, tr.name AS type_name, tr.byte_size, tr.tag "
             "FROM dwarfmember m "
-            "JOIN canonical_dwarf_type t ON t.id = m.canonical_type_id "
-            "JOIN binary_dwarf_ref r ON r.canonical_id = t.id "
+            "JOIN binary_dwarf_ref r ON r.id = m.binary_ref_id "
+            "JOIN canonical_dwarf_type t ON t.id = r.canonical_id "
             "JOIN binary b ON b.id = r.binary_id AND b.name = :binary "
             "LEFT JOIN binary_dwarf_ref rr ON rr.binary_id = b.id AND rr.die_offset = m.member_type_ref "
             "LEFT JOIN canonical_dwarf_type tr ON tr.id = rr.canonical_id "
@@ -197,8 +193,8 @@ BUILTIN_QUERIES: list[QueryDef] = [
         sql=(
             "SELECT m.byte_offset, m.name, tr.name AS type_name, tr.byte_size "
             "FROM dwarfmember m "
-            "JOIN canonical_dwarf_type t ON t.id = m.canonical_type_id "
-            "JOIN binary_dwarf_ref r ON r.canonical_id = t.id "
+            "JOIN binary_dwarf_ref r ON r.id = m.binary_ref_id "
+            "JOIN canonical_dwarf_type t ON t.id = r.canonical_id "
             "JOIN binary b ON b.id = r.binary_id AND b.name = :binary "
             "LEFT JOIN binary_dwarf_ref rr ON rr.binary_id = b.id AND rr.die_offset = m.member_type_ref "
             "LEFT JOIN canonical_dwarf_type tr ON tr.id = rr.canonical_id "
@@ -254,6 +250,7 @@ BUILTIN_QUERIES: list[QueryDef] = [
         ),
         description="Virtual address → symbol + source location via snapshot mapping. addr = runtime VA.",
         params=["id", "addr"],
+        address_params=["addr"],
     ),
 ]
 
@@ -274,6 +271,7 @@ def _load_toml_queries(path: Path) -> dict[str, QueryDef]:
         return {}
     except Exception as e:
         import warnings
+
         warnings.warn(f"Could not parse {path}: {e}", stacklevel=2)
         return {}
 
@@ -338,6 +336,7 @@ def _load_toml_aliases(path: Path) -> dict[str, list[str]]:
         return {}
     except Exception as e:
         import warnings
+
         warnings.warn(f"Could not parse {path}: {e}", stacklevel=2)
         return {}
 
@@ -345,6 +344,7 @@ def _load_toml_aliases(path: Path) -> dict[str, list[str]]:
     for name, value in data.get("alias", {}).items():
         if isinstance(value, str):
             import shlex
+
             result[name] = shlex.split(value)
         elif isinstance(value, list):
             result[name] = [str(t) for t in value]
@@ -403,7 +403,7 @@ def expand_aliases(argv: list[str]) -> list[str]:
             continue
         if arg in aliases:
             expansion = aliases[arg]
-            return argv[:i] + expansion + argv[i + 1:]
+            return argv[:i] + expansion + argv[i + 1 :]
         break  # first non-flag arg is not an alias
 
     return argv

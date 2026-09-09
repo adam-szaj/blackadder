@@ -5,48 +5,66 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-import pytest
-
-from blackadder.crash_patterns import CrashPattern, CrashPatternEngine, CrashPatternReport
-
+from blackadder.crash_patterns import CrashPatternEngine
 
 # ============================================================================
 # Helpers — lightweight stand-ins for ORM objects
 # ============================================================================
 
 
-def _thread(tid: int, db_id: int, wchan: str = "", syscall: str = "",
-            stack_start: int = 0x7fff0000, stack_end: int = 0x7fff8000):
+def _thread(
+    tid: int,
+    db_id: int,
+    wchan: str = "",
+    syscall: str = "",
+    stack_start: int = 0x7FFF0000,
+    stack_end: int = 0x7FFF8000,
+):
     return SimpleNamespace(
-        id=db_id, tid=tid, name=f"t{tid}",
-        wchan=wchan, syscall=syscall,
-        stack_start=stack_start, stack_end=stack_end,
+        id=db_id,
+        tid=tid,
+        name=f"t{tid}",
+        wchan=wchan,
+        syscall=syscall,
+        stack_start=stack_start,
+        stack_end=stack_end,
     )
 
 
 def _bt(thread_id: int, symbol: str, frame_num: int = 0, process_id: int = 1):
     return SimpleNamespace(
-        thread_id=thread_id, resolved_symbol=symbol,
-        frame_num=frame_num, process_id=process_id,
-        address=0, resolved_file=None, resolved_line=None,
+        thread_id=thread_id,
+        resolved_symbol=symbol,
+        frame_num=frame_num,
+        process_id=process_id,
+        address=0,
+        resolved_file=None,
+        resolved_line=None,
         match_confidence=None,
     )
 
 
-def _mapping(perms: str, pathname: str = "", start: int = 0x7f000000, end: int = 0x7f100000):
+def _mapping(perms: str, pathname: str = "", start: int = 0x7F000000, end: int = 0x7F100000):
     return SimpleNamespace(
-        perms=perms, pathname=pathname,
-        start_addr=start, end_addr=end,
-        process_id=1, offset=0, dev="", inode=0,
+        perms=perms,
+        pathname=pathname,
+        start_addr=start,
+        end_addr=end,
+        process_id=1,
+        offset=0,
+        dev="",
+        inode=0,
     )
 
 
 def _regstate(thread_id: int | None, registers: dict):
     import json
+
     return SimpleNamespace(
         thread_id=thread_id,
         registers_json=json.dumps(registers),
-        arch="x86_64", process_id=1,
+        arch="x86_64",
+        process_id=1,
     )
 
 
@@ -95,6 +113,7 @@ class TestNoPatterns:
 class TestDeadlockPattern:
     def test_deadlock_forwarded(self):
         from blackadder.deadlock_analyzer import DeadlockCycle
+
         cycle = DeadlockCycle(tids=[1, 2], evidence_level="certain", description="A→B→A")
 
         @dataclass
@@ -121,26 +140,26 @@ class TestDeadlockPattern:
 
 class TestStackOverflow:
     def test_detects_sp_near_stack_end(self):
-        t = _thread(200, 2, stack_end=0x7fff8000)
+        t = _thread(200, 2, stack_end=0x7FFF8000)
         # SP 100 bytes from stack_end → overflow
-        rs = _regstate(2, {"rsp": 0x7fff8000 - 100})
+        rs = _regstate(2, {"rsp": 0x7FFF8000 - 100})
         report = _engine(threads=[t], register_states=[rs]).analyze()
         assert any(p.name == "stack-overflow" for p in report.patterns)
 
     def test_no_overflow_when_sp_safe(self):
-        t = _thread(200, 2, stack_end=0x7fff8000)
-        rs = _regstate(2, {"rsp": 0x7fff0000})  # 32 KB away
+        t = _thread(200, 2, stack_end=0x7FFF8000)
+        rs = _regstate(2, {"rsp": 0x7FFF0000})  # 32 KB away
         report = _engine(threads=[t], register_states=[rs]).analyze()
         assert not any(p.name == "stack-overflow" for p in report.patterns)
 
     def test_arm_sp_register(self):
-        t = _thread(200, 2, stack_end=0x7fff8000)
-        rs = _regstate(2, {"sp": 0x7fff8000 - 50})  # ARM sp
+        t = _thread(200, 2, stack_end=0x7FFF8000)
+        rs = _regstate(2, {"sp": 0x7FFF8000 - 50})  # ARM sp
         report = _engine(threads=[t], register_states=[rs]).analyze()
         assert any(p.name == "stack-overflow" for p in report.patterns)
 
     def test_no_overflow_when_no_register_state(self):
-        t = _thread(200, 2, stack_end=0x7fff8000)
+        t = _thread(200, 2, stack_end=0x7FFF8000)
         report = _engine(threads=[t]).analyze()
         assert not any(p.name == "stack-overflow" for p in report.patterns)
 
@@ -162,7 +181,7 @@ class TestNullDeref:
         assert any(p.name == "null-deref" for p in report.patterns)
 
     def test_no_null_deref_for_normal_ip(self):
-        rs = _regstate(None, {"rip": 0x7f1234567890})
+        rs = _regstate(None, {"rip": 0x7F1234567890})
         report = _engine(register_states=[rs]).analyze()
         assert not any(p.name == "null-deref" for p in report.patterns)
 
@@ -174,10 +193,14 @@ class TestNullDeref:
     def test_h2_crash_insn_att_syntax(self):
         # AT&T syntax: movl $0x2a,(%rdi) — rdi used as memory base
         # Exact backtrace_test scenario: rdi=0x0 at movl $0x2a,(%rdi)
-        rs = _regstate(None, {
-            "rip": 0x55555555512d, "rdi": 0x0,
-            "__crash_insn__": "movl   $0x2a,(%rdi)",
-        })
+        rs = _regstate(
+            None,
+            {
+                "rip": 0x55555555512D,
+                "rdi": 0x0,
+                "__crash_insn__": "movl   $0x2a,(%rdi)",
+            },
+        )
         report = _engine(register_states=[rs]).analyze()
         p = next((x for x in report.patterns if x.name == "null-deref"), None)
         assert p is not None
@@ -186,10 +209,14 @@ class TestNullDeref:
 
     def test_h2_crash_insn_intel_syntax(self):
         # Intel syntax: mov DWORD PTR [rdi],0x2a
-        rs = _regstate(None, {
-            "rip": 0x400000, "rdi": 0x0,
-            "__crash_insn__": "mov    DWORD PTR [rdi],0x2a",
-        })
+        rs = _regstate(
+            None,
+            {
+                "rip": 0x400000,
+                "rdi": 0x0,
+                "__crash_insn__": "mov    DWORD PTR [rdi],0x2a",
+            },
+        )
         report = _engine(register_states=[rs]).analyze()
         p = next((x for x in report.patterns if x.name == "null-deref"), None)
         assert p is not None
@@ -197,16 +224,20 @@ class TestNullDeref:
 
     def test_h2_no_false_positive_nonzero_reg(self):
         # rdi in crash instruction but not NULL — no null-deref
-        rs = _regstate(None, {
-            "rip": 0x400000, "rdi": 0x7f1234567890,
-            "__crash_insn__": "movl   $0x2a,(%rdi)",
-        })
+        rs = _regstate(
+            None,
+            {
+                "rip": 0x400000,
+                "rdi": 0x7F1234567890,
+                "__crash_insn__": "movl   $0x2a,(%rdi)",
+            },
+        )
         report = _engine(register_states=[rs]).analyze()
         assert not any(p.name == "null-deref" for p in report.patterns)
 
     def test_h3_fallback_zero_reg(self):
         # No crash instruction — h3 fallback: rdi=0 while rip is valid
-        rs = _regstate(None, {"rip": 0x55555555512d, "rdi": 0x0})
+        rs = _regstate(None, {"rip": 0x55555555512D, "rdi": 0x0})
         report = _engine(register_states=[rs]).analyze()
         p = next((x for x in report.patterns if x.name == "null-deref"), None)
         assert p is not None
@@ -214,14 +245,13 @@ class TestNullDeref:
 
     def test_h3_no_false_positive_normal_regs(self):
         # All regs have normal values — no null-deref
-        rs = _regstate(None, {"rip": 0x55555555512d, "rdi": 0x7f1234567890})
+        rs = _regstate(None, {"rip": 0x55555555512D, "rdi": 0x7F1234567890})
         report = _engine(register_states=[rs]).analyze()
         assert not any(p.name == "null-deref" for p in report.patterns)
 
     def test_h1_takes_precedence_when_ip_null(self):
         # IP is NULL — h1 fires, h2/h3 skipped for same thread
-        rs = _regstate(None, {"rip": 0x0, "rdi": 0x0,
-                               "__crash_insn__": "movl $0x2a,(%rdi)"})
+        rs = _regstate(None, {"rip": 0x0, "rdi": 0x0, "__crash_insn__": "movl $0x2a,(%rdi)"})
         report = _engine(register_states=[rs]).analyze()
         patterns = [p for p in report.patterns if p.name == "null-deref"]
         assert len(patterns) == 1

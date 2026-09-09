@@ -17,20 +17,32 @@ import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskID,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
-logger = logging.getLogger("blackadder.cli")
-
 from blackadder.binutils import init_parser, parse_backtrace_auto
+from blackadder.cli.meta_commands import register_meta_commands
+from blackadder.cli.query_commands import register_query_command
 from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
 from blackadder.db.rootfs import PAYLOAD_SENTINEL, RootfsDatabase
 from blackadder.logging_config import setup_logging
-from blackadder.theme import ColorTheme, column_style, format_value, load_theme
+from blackadder.theme import ColorTheme, load_theme
+
+logger = logging.getLogger("blackadder.cli")
 
 app = typer.Typer(
     name="baldrick",
@@ -47,9 +59,13 @@ _theme: ColorTheme = ColorTheme()  # default Tokyo Night; overridden in callback
 @app.callback()
 def _global_options(
     debug: bool = typer.Option(False, "--debug", help="Enable DEBUG level logging"),
-    log_level: str = typer.Option("WARNING", "--log-level", help="Log level (DEBUG, INFO, WARNING, ERROR)"),
+    log_level: str = typer.Option(
+        "WARNING", "--log-level", help="Log level (DEBUG, INFO, WARNING, ERROR)"
+    ),
     log_file: str | None = typer.Option(None, "--log-file", help="Write logs to file"),
-    db: str | None = typer.Option(None, "--db", "-d", help="Path to database (overrides config default)"),
+    db: str | None = typer.Option(
+        None, "--db", "-d", help="Path to database (overrides config default)"
+    ),
 ) -> None:
     """Global options applied to all commands."""
     global _global_db, _theme
@@ -228,36 +244,39 @@ def _iter_binary_paths(
                 raw_paths = [line.strip() for line in f if line.strip()]
         else:
             raw_paths = [p for p in files_spec.split(":") if p]
-        for p in raw_paths:
-            full = str(Path(rootfs_base) / p.lstrip("/"))
+        for raw_path in raw_paths:
+            full = str(Path(rootfs_base) / raw_path.lstrip("/"))
             logger.debug("files_candidate", extra={"path": full})
             if Path(full).is_file():
                 yield full
-            elif Path(p).is_file():
-                yield p
+            elif Path(raw_path).is_file():
+                yield raw_path
 
     if maps_file:
         with open(maps_file) as f:
             maps_text = f.read()
-        for p in _collect_paths_from_maps_text(maps_text, rootfs):
-            logger.debug("maps_candidate", extra={"path": p})
-            yield p
+        for map_path in _collect_paths_from_maps_text(maps_text, rootfs):
+            logger.debug("maps_candidate", extra={"path": map_path})
+            yield map_path
 
     if pid:
         proc_maps = f"/proc/{pid}/maps"
         try:
             with open(proc_maps) as f:
                 maps_text = f.read()
-            for p in _collect_paths_from_maps_text(maps_text, rootfs):
-                logger.debug("pid_maps_candidate", extra={"path": p})
-                yield p
+            for map_path in _collect_paths_from_maps_text(maps_text, rootfs):
+                logger.debug("pid_maps_candidate", extra={"path": map_path})
+                yield map_path
         except PermissionError:
             console.print(f"[yellow]Warning: Cannot read {proc_maps} (permission denied)[/yellow]")
         except FileNotFoundError:
-            console.print(f"[yellow]Warning: {proc_maps} not found - process {pid} may not exist[/yellow]")
+            console.print(
+                f"[yellow]Warning: {proc_maps} not found - process {pid} may not exist[/yellow]"
+            )
 
     if core_file:
         from blackadder.binutils.coredump import CoreDumpParser
+
         config = _get_config_or_default()
         parser = CoreDumpParser(config)
 
@@ -290,7 +309,9 @@ def _collect_binary_paths(
 ) -> list[str]:
     """Collect and deduplicate binary file paths (no progress feedback)."""
     seen: set[str] = set()
-    for p in _iter_binary_paths(rootfs, glob_pattern, perm, files_spec, dirs, maps_file, pid, core_file):
+    for p in _iter_binary_paths(
+        rootfs, glob_pattern, perm, files_spec, dirs, maps_file, pid, core_file
+    ):
         seen.add(p)
     return sorted(seen)
 
@@ -316,9 +337,7 @@ async def load(
         "-f",
         help="File list: colon-separated paths or @file with one path per line",
     ),
-    maps_file: str | None = typer.Option(
-        None, "--maps", "-m", help="Path to /proc/PID/maps file"
-    ),
+    maps_file: str | None = typer.Option(None, "--maps", "-m", help="Path to /proc/PID/maps file"),
     pid: int | None = typer.Option(
         None, "--pid", "-p", help="Running process PID (reads /proc/PID/maps)"
     ),
@@ -326,7 +345,8 @@ async def load(
         None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
     dirs: str | None = typer.Option(
-        None, "--dirs",
+        None,
+        "--dirs",
         help=(
             "Colon-separated list of dirs to scan under rootfs for ELF binaries "
             "(e.g. /bin:/lib:/usr/lib). "
@@ -346,7 +366,9 @@ async def load(
         None, "--maxdepth", help="Max directory depth to recurse into (0 = only top-level dir)"
     ),
     slow_threshold: float = typer.Option(
-        5.0, "--slow-threshold", help="Show a spinner for binaries taking longer than this many seconds"
+        5.0,
+        "--slow-threshold",
+        help="Show a spinner for binaries taking longer than this many seconds",
     ),
     slow_top: int = typer.Option(
         5, "--slow-top", help="Max number of slow-binary spinners shown simultaneously"
@@ -372,7 +394,9 @@ async def load(
     sources = [glob_pattern, perm, files_spec, dirs, maps_file, pid, core_file]
     if not any(s is not None for s in sources):
         dirs = _DEFAULT_SCAN_DIRS
-        console.print(f"[dim]No source specified — scanning default dirs: {_DEFAULT_SCAN_DIRS}[/dim]")
+        console.print(
+            f"[dim]No source specified — scanning default dirs: {_DEFAULT_SCAN_DIRS}[/dim]"
+        )
 
     config = _get_config_or_default()
 
@@ -404,7 +428,10 @@ async def load(
                     description=f"Scanning… {len(seen)} found",
                 )
                 if max_bin is not None and len(seen) >= max_bin:
-                    collect_progress.update(scan_task, description=f"Scanning… {len(seen)} found (--maxbin limit reached)")
+                    collect_progress.update(
+                        scan_task,
+                        description=f"Scanning… {len(seen)} found (--maxbin limit reached)",
+                    )
                     break
 
         binary_paths = sorted(seen)
@@ -433,10 +460,16 @@ async def load(
         # payload_queue: workers produce BinaryPayload, writer consumes.
         # maxsize=64 bounds memory: 64 payloads × ~500KB worst case ≈ 32 MB.
         payload_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
-        _live: dict[str, int] = {"loaded": 0, "skipped": 0, "types": 0, "lines": 0, "retries": 0, "t_wait": 0, "t_write": 0}
-        writer_task = asyncio.create_task(
-            rootfs_db_obj.run_payload_writer(payload_queue, _live)
-        )
+        _live: dict[str, int] = {
+            "loaded": 0,
+            "skipped": 0,
+            "types": 0,
+            "lines": 0,
+            "retries": 0,
+            "t_wait": 0,
+            "t_write": 0,
+        }
+        writer_task = asyncio.create_task(rootfs_db_obj.run_payload_writer(payload_queue, _live))
 
         progress = Progress(
             SpinnerColumn(),
@@ -458,11 +491,15 @@ async def load(
             tw, twr = _live["t_wait"], _live["t_write"]
             writer_info = f" db={twr}ms idle={tw}ms" if (tw or twr) else ""
             extra = (
-                f", q={q_size}/64"
-                f" types={_live['types']} lines={_live['lines']}"
-                + writer_info
-                + (f" [red]retries={_live['retries']}[/red]" if _live["retries"] else "")
-            ) if (load_types or load_lines) else writer_info
+                (
+                    f", q={q_size}/64"
+                    f" types={_live['types']} lines={_live['lines']}"
+                    + writer_info
+                    + (f" [red]retries={_live['retries']}[/red]" if _live["retries"] else "")
+                )
+                if (load_types or load_lines)
+                else writer_info
+            )
             progress.update(
                 task_id,
                 description=(
@@ -476,7 +513,7 @@ async def load(
         # slow_threshold / slow_top come from CLI options
 
         # Map: path → (start_time, progress_task_id | None)
-        _slow_running: dict[str, tuple[float, int | None]] = {}
+        _slow_running: dict[str, tuple[float, TaskID | None]] = {}
 
         def _slow_register(path: str) -> None:
             _slow_running[path] = (time.monotonic(), None)
@@ -492,7 +529,11 @@ async def load(
             # Collect tasks past threshold that don't yet have a subtask row,
             # sorted oldest-first so we promote the slowest ones.
             pending = sorted(
-                ((p, t0) for p, (t0, tid) in _slow_running.items() if tid is None and now - t0 >= slow_threshold),
+                (
+                    (p, t0)
+                    for p, (t0, tid) in _slow_running.items()
+                    if tid is None and now - t0 >= slow_threshold
+                ),
                 key=lambda x: x[1],
             )
             # Count how many slots are already occupied
@@ -510,10 +551,13 @@ async def load(
             # Update description of already-visible slow tasks; include slot info
             total_slow = sum(1 for t0, tid in _slow_running.values() if now - t0 >= slow_threshold)
             visible_slow = sum(1 for t0, tid in _slow_running.values() if tid is not None)
-            for path, (t0, tid) in _slow_running.items():
-                if tid is not None:
+            for path, (t0, current_task_id) in _slow_running.items():
+                if current_task_id is not None:
                     elapsed = now - t0
-                    progress.update(tid, description=f"  [dim]{Path(path).name} ({elapsed:.0f}s…) [{visible_slow}/{total_slow} slow][/dim]")
+                    progress.update(
+                        current_task_id,
+                        description=f"  [dim]{Path(path).name} ({elapsed:.0f}s…) [{visible_slow}/{total_slow} slow][/dim]",
+                    )
 
         async def _load_one(path: str) -> None:
             nonlocal failed, active, t_io, tasks_done
@@ -523,8 +567,11 @@ async def load(
             try:
                 _t1 = time.monotonic()
                 payload = await rootfs_db_obj.collect_binary_payload(
-                    path, rootfs=rootfs, debugfs=debugfs or rootfs,
-                    load_types=load_types, load_lines=load_lines,
+                    path,
+                    rootfs=rootfs,
+                    debugfs=debugfs or rootfs,
+                    load_types=load_types,
+                    load_lines=load_lines,
                 )
                 t_io += time.monotonic() - _t1
                 tasks_done += 1
@@ -583,24 +630,41 @@ async def load(
         )
 
         n = max(tasks_done, 1)
-        timing_table = Table(title="Phase timing (wall-clock, cumulative across all tasks)", box=None, show_header=True)
+        timing_table = Table(
+            title="Phase timing (wall-clock, cumulative across all tasks)",
+            box=None,
+            show_header=True,
+        )
         timing_table.add_column("Phase", style="bold")
         timing_table.add_column("Total (s)", justify="right")
         timing_table.add_column("Avg/task (ms)", justify="right")
         timing_table.add_column("Note", style="dim")
-        w_queue  = writer_stats.get("t_queue_ms", 0)
-        w_apply  = writer_stats.get("t_apply_ms", 0)
+        w_queue = writer_stats.get("t_queue_ms", 0)
+        w_apply = writer_stats.get("t_apply_ms", 0)
         w_commit = writer_stats.get("t_commit_ms", 0)
-        commits  = writer_stats.get("commits", 0)
+        commits = writer_stats.get("commits", 0)
         avg_commit_ms = f"{w_commit // commits}ms/commit" if commits else "—"
-        timing_table.add_row("collect I/O",       f"{t_io:.2f}",        f"{t_io/n*1000:.0f}", "md5 + readelf + objdump" + (" + DWARF" if load_types else "") + (" + debugline" if (load_lines and not load_types) else ""))
-        timing_table.add_row("db INSERT (SQL)",   f"{w_apply/1000:.2f}",  "—",
-                             f"{writer_stats.get('loaded',0)} loaded, {writer_stats.get('skipped',0)} skipped, "
-                             f"{writer_stats.get('types',0)} types, {writer_stats.get('lines',0)} lines")
-        timing_table.add_row("db COMMIT",         f"{w_commit/1000:.2f}", "—",
-                             f"{commits} commits · {avg_commit_ms}")
-        timing_table.add_row("db writer idle",    f"{w_queue/1000:.2f}",  "—",
-                             "waiting for next payload from workers")
+        timing_table.add_row(
+            "collect I/O",
+            f"{t_io:.2f}",
+            f"{t_io / n * 1000:.0f}",
+            "md5 + readelf + objdump"
+            + (" + DWARF" if load_types else "")
+            + (" + debugline" if (load_lines and not load_types) else ""),
+        )
+        timing_table.add_row(
+            "db INSERT (SQL)",
+            f"{w_apply / 1000:.2f}",
+            "—",
+            f"{writer_stats.get('loaded', 0)} loaded, {writer_stats.get('skipped', 0)} skipped, "
+            f"{writer_stats.get('types', 0)} types, {writer_stats.get('lines', 0)} lines",
+        )
+        timing_table.add_row(
+            "db COMMIT", f"{w_commit / 1000:.2f}", "—", f"{commits} commits · {avg_commit_ms}"
+        )
+        timing_table.add_row(
+            "db writer idle", f"{w_queue / 1000:.2f}", "—", "waiting for next payload from workers"
+        )
         console.print(timing_table)
         await manager.close()
 
@@ -613,7 +677,9 @@ async def load(
 
 @app.command()
 async def load_types(
-    binary: str = typer.Option(..., "--binary", "-b", help="Path to binary (must be loaded via 'load' first)"),
+    binary: str = typer.Option(
+        ..., "--binary", "-b", help="Path to binary (must be loaded via 'load' first)"
+    ),
 ) -> None:
     """
     Load DWARF type info and .debug_line mappings from a single binary.
@@ -630,7 +696,9 @@ async def load_types(
     try:
         await manager.create_all()
         rootfs_db_obj = RootfsDatabase(manager, config)
-        payload = await rootfs_db_obj.collect_binary_payload(binary, rootfs="/", debugfs=None, load_types=True)
+        payload = await rootfs_db_obj.collect_binary_payload(
+            binary, rootfs="/", debugfs=None, load_types=True
+        )
         stats = await rootfs_db_obj.apply_single_payload(payload)
         console.print(
             f"[green]✓ {binary}: {stats['types']} types, {stats['members']} members, "
@@ -709,7 +777,9 @@ async def cast_mem(
 
         root, flat = result
         if root.tag not in ("structure_type", "union_type"):
-            console.print(f"[yellow]Warning: {type_name!r} resolves to tag={root.tag!r}, not a struct/union[/yellow]")
+            console.print(
+                f"[yellow]Warning: {type_name!r} resolves to tag={root.tag!r}, not a struct/union[/yellow]"
+            )
 
         # --- Render table ---
         table = Table(title=f"cast-mem: {type_name} @ {binary}")
@@ -721,7 +791,7 @@ async def cast_mem(
 
         for foffset, fpath, ftname, fbsize, fenc in flat:
             if fbsize and fbsize > 0 and foffset + fbsize <= len(buf):
-                raw_bytes = buf[foffset:foffset + fbsize]
+                raw_bytes = buf[foffset : foffset + fbsize]
                 hex_val = raw_bytes.hex()
                 # Interpret as integer
                 signed = fenc in ("signed", "signed_char") if fenc else False
@@ -753,41 +823,34 @@ async def cast_mem(
 
 @app.command()
 async def load_process(
-    maps_file: str | None = typer.Option(
-        None, "--maps", "-m", help="Path to /proc/PID/maps file"
-    ),
+    maps_file: str | None = typer.Option(None, "--maps", "-m", help="Path to /proc/PID/maps file"),
     pid: int | None = typer.Option(None, "--pid", "-p", help="Running process PID"),
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
     gdb_dump_file: str | None = typer.Option(
-        None, "--gdb-dump", "-G",
+        None,
+        "--gdb-dump",
+        "-G",
         help="Path to GDB text dump (output of 'thread apply all bt full' + 'info registers'). "
-             "Can be combined with --coredump or --maps to add thread backtraces and registers.",
+        "Can be combined with --coredump or --maps to add thread backtraces and registers.",
     ),
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
-    debugfs: str | None = typer.Option(None,
-                                       "--debugfs",
-                                       "-D",
-                                       help="Path to debugfs"),
+    debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
     tag: str | None = typer.Option(
-        None, "--tag", "-T", help="Human-readable label for this snapshot"),
+        None, "--tag", "-T", help="Human-readable label for this snapshot"
+    ),
     snapshot_id: int | None = typer.Option(
-        None,
-        "--snapshot-id",
-        "-s",
-        help="Merge data into this existing snapshot"),
+        None, "--snapshot-id", "-s", help="Merge data into this existing snapshot"
+    ),
     update: bool = typer.Option(
-        False,
-        "--update",
-        "-u",
-        help="Allow updating/merging into an existing snapshot"),
+        False, "--update", "-u", help="Allow updating/merging into an existing snapshot"
+    ),
     force: bool = typer.Option(
         False,
         "--force",
         "-f",
-        help=
-        "When merging with --tag, steal the tag from another snapshot if needed"
+        help="When merging with --tag, steal the tag from another snapshot if needed",
     ),
 ) -> None:
     """
@@ -825,8 +888,7 @@ async def load_process(
         # ── Resolve existing snapshot ────────────────────────────────────────
         existing = None
         try:
-            existing = await db_proc.resolve_snapshot(tag=tag,
-                                                      snapshot_id=snapshot_id)
+            existing = await db_proc.resolve_snapshot(tag=tag, snapshot_id=snapshot_id)
         except ProcessNotFoundError as e:
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1)
@@ -835,8 +897,7 @@ async def load_process(
             if not force:
                 raise typer.Exit(1)
             # --force: re-resolve without raising, merge will steal the tag
-            existing = await db_proc.resolve_snapshot(tag=None,
-                                                      snapshot_id=snapshot_id)
+            existing = await db_proc.resolve_snapshot(tag=None, snapshot_id=snapshot_id)
 
         # ── Guard: update requires -u ────────────────────────────────────────
         if existing is not None and not update:
@@ -845,7 +906,8 @@ async def load_process(
                 hint += f"  (tag: {existing.tag!r})"
             console.print(
                 f"[red]Error: Snapshot already exists ({hint}).\n"
-                f"Use --update / -u to merge new data into it.[/red]")
+                f"Use --update / -u to merge new data into it.[/red]"
+            )
             raise typer.Exit(1)
 
         # ── Read input files ─────────────────────────────────────────────────
@@ -859,14 +921,12 @@ async def load_process(
                     with open(proc_maps_path) as f:
                         maps_text = f.read()
                 except (FileNotFoundError, PermissionError) as e:
-                    console.print(
-                        f"[red]Error: Cannot read {proc_maps_path}: {e}[/red]")
+                    console.print(f"[red]Error: Cannot read {proc_maps_path}: {e}[/red]")
                     raise typer.Exit(1)
             elif maps_file:
                 maps_path = Path(maps_file)
                 if not maps_path.exists():
-                    console.print(
-                        f"[red]Error: maps file not found: {maps_file}[/red]")
+                    console.print(f"[red]Error: maps file not found: {maps_file}[/red]")
                     raise typer.Exit(1)
                 with open(maps_path) as f:
                     maps_text = f.read()
@@ -874,9 +934,7 @@ async def load_process(
         if gdb_dump_file:
             gdb_path = Path(gdb_dump_file)
             if not gdb_path.exists():
-                console.print(
-                    f"[red]Error: GDB dump file not found: {gdb_dump_file}[/red]"
-                )
+                console.print(f"[red]Error: GDB dump file not found: {gdb_dump_file}[/red]")
                 raise typer.Exit(1)
             gdb_text = gdb_path.read_text(errors="replace")
 
@@ -886,67 +944,57 @@ async def load_process(
             if core_file:
                 core_path = Path(core_file)
                 if not core_path.exists():
-                    console.print(
-                        f"[red]Error: core dump file not found: {core_file}[/red]"
-                    )
+                    console.print(f"[red]Error: core dump file not found: {core_file}[/red]")
                     raise typer.Exit(1)
-                console.print(
-                    f"[blue]Parsing core dump from {core_file}...[/blue]")
-                process = await db_proc.load_core_dump(str(core_path),
-                                                       rootfs=rootfs,
-                                                       debugfs=debugfs
-                                                       or rootfs,
-                                                       tag=tag)
+                console.print(f"[blue]Parsing core dump from {core_file}...[/blue]")
+                process = await db_proc.load_core_dump(
+                    str(core_path), rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag
+                )
             elif maps_text is not None:
                 console.print("[blue]Loading memory mappings...[/blue]")
-                process = await db_proc.load_maps(pid,
-                                                  maps_text,
-                                                  rootfs=rootfs,
-                                                  debugfs=debugfs or rootfs,
-                                                  tag=tag)
+                process = await db_proc.load_maps(
+                    pid, maps_text, rootfs=rootfs, debugfs=debugfs or rootfs, tag=tag
+                )
             else:
                 # gdb_dump only — create a minimal bare snapshot then load dump into it
                 from sqlalchemy.orm import selectinload as _sil
                 from sqlmodel import select as _sel
 
                 from blackadder.models import ProcessSnapshot as _PS
-                console.print(
-                    "[blue]Creating snapshot from GDB dump...[/blue]")
+
+                console.print("[blue]Creating snapshot from GDB dump...[/blue]")
                 async with proc_manager.get_session() as _sess:
-                    _snap = _PS(pid=pid,
-                                description="GDB dump",
-                                source_type="gdb_dump",
-                                tag=tag)
+                    _snap = _PS(pid=pid, description="GDB dump", source_type="gdb_dump", tag=tag)
                     _sess.add(_snap)
                     await _sess.commit()
                     _snap_id = _snap.id
-                await db_proc.load_gdb_dump(_snap_id,
-                                            gdb_text)  # type: ignore[arg-type]
+                await db_proc.load_gdb_dump(_snap_id, gdb_text)  # type: ignore[arg-type]
                 async with proc_manager.get_session() as _sess:
                     _r = await _sess.execute(  # type: ignore
-                        _sel(_PS).where(_PS.id == _snap_id).options(
-                            _sil(_PS.mappings)))
-                    process = _r.scalars().first()
+                        _sel(_PS).where(_PS.id == _snap_id).options(_sil(_PS.mappings))  # type: ignore[arg-type]
+                    )
+                    loaded_process = _r.scalars().first()
+                    if loaded_process is None:
+                        raise RuntimeError(f"Snapshot disappeared: id={_snap_id}")
+                    process = loaded_process
                 gdb_text = None  # already loaded above
 
             # Enrich with GDB dump if also provided alongside core/maps
             if gdb_text:
-                console.print(
-                    f"[blue]Parsing GDB dump from {gdb_dump_file}...[/blue]")
+                console.print(f"[blue]Parsing GDB dump from {gdb_dump_file}...[/blue]")
+                if process.id is None:
+                    raise RuntimeError("Snapshot was not assigned an ID")
                 await db_proc.load_gdb_dump(process.id, gdb_text)
 
             mode_label = "created"
 
         else:
             # ── MERGE into existing snapshot ─────────────────────────────────
-            console.print(
-                f"[blue]Merging into snapshot #{existing.id}...[/blue]")
+            console.print(f"[blue]Merging into snapshot #{existing.id}...[/blue]")
             if core_file:
                 core_path_str = str(Path(core_file).resolve())
                 if not Path(core_file).exists():
-                    console.print(
-                        f"[red]Error: core dump file not found: {core_file}[/red]"
-                    )
+                    console.print(f"[red]Error: core dump file not found: {core_file}[/red]")
                     raise typer.Exit(1)
             else:
                 core_path_str = None
@@ -965,16 +1013,25 @@ async def load_process(
             mode_label = f"updated (merged into #{existing.id})"
 
         # Build section lookup and collect debug_file info in one DB pass
-        from blackadder.models import BinaryLocator
         from sqlmodel import select as sql_select
 
+        from blackadder.models import BinaryLocator
+
         debug_file_map: dict[str, str] = {}  # binary pathname -> debug file path
-        unique_paths = {m.pathname for m in process.mappings if m.pathname and not m.pathname.startswith("[")}
+        unique_paths = {
+            m.pathname for m in process.mappings if m.pathname and not m.pathname.startswith("[")
+        }
         async with proc_manager.get_session() as session:
             for path in unique_paths:
-                loc = (await session.execute(
-                    sql_select(BinaryLocator).where(BinaryLocator.path == path)
-                )).scalars().first()
+                loc = (
+                    (
+                        await session.execute(
+                            sql_select(BinaryLocator).where(BinaryLocator.path == path)
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
                 if not loc:
                     continue
                 if loc.debug_file:
@@ -984,20 +1041,30 @@ async def load_process(
         mappings = process.mappings
         total_size = sum(m.end_addr - m.start_addr for m in mappings)
 
-        libs = {m.pathname for m in mappings
-                if m.pathname and not m.pathname.startswith("[") and m.pathname != "[anonymous]"}
-        heap_regions = [m for m in mappings if m.pathname in ("[heap]", "[anonymous]")
-                        or (not m.pathname or m.pathname == "[anonymous]") and "rw" in m.perms]
-        stack_regions = [m for m in mappings
-                         if m.pathname and (m.pathname == "[stack]" or m.pathname.startswith("[stack:"))]
-        anon_regions = [m for m in mappings
-                        if not m.pathname or m.pathname == "[anonymous]"]
+        libs = {
+            m.pathname
+            for m in mappings
+            if m.pathname and not m.pathname.startswith("[") and m.pathname != "[anonymous]"
+        }
+        heap_regions = [
+            m
+            for m in mappings
+            if m.pathname in ("[heap]", "[anonymous]")
+            or (not m.pathname or m.pathname == "[anonymous]")
+            and "rw" in m.perms
+        ]
+        stack_regions = [
+            m
+            for m in mappings
+            if m.pathname and (m.pathname == "[stack]" or m.pathname.startswith("[stack:"))
+        ]
+        anon_regions = [m for m in mappings if not m.pathname or m.pathname == "[anonymous]"]
         rwx_regions = [m for m in mappings if "r" in m.perms and "w" in m.perms and "x" in m.perms]
 
         def _fmt_size(n: int) -> str:
-            if n >= 1024 ** 3:
+            if n >= 1024**3:
                 return f"{n / 1024**3:.1f} GB"
-            if n >= 1024 ** 2:
+            if n >= 1024**2:
                 return f"{n / 1024**2:.1f} MB"
             if n >= 1024:
                 return f"{n / 1024:.1f} KB"
@@ -1050,11 +1117,15 @@ async def load_process(
             console.print(dbg_table)
 
         # Show threads table if threads were loaded
-        from blackadder.models import Thread as ThreadModel
         from sqlmodel import select as sqlmodel_select
+
+        from blackadder.models import Thread as ThreadModel
+
         async with proc_manager.get_session() as _sess:
             _result = await _sess.execute(  # type: ignore
-                sqlmodel_select(ThreadModel).where(ThreadModel.process_id == process.id).order_by(ThreadModel.tid)
+                sqlmodel_select(ThreadModel)
+                .where(ThreadModel.process_id == process.id)
+                .order_by(ThreadModel.tid)  # type: ignore[arg-type]
             )
             db_threads = _result.scalars().all()
 
@@ -1092,7 +1163,9 @@ async def decode_backtrace(
     trace_file: str | None = typer.Option(
         None, "--trace", "-t", help="Backtrace file (default: stdin)"
     ),
-    snapshot_id: int | None = typer.Option(None, "--snapshot-id", "-s", help="Process snapshot ID (default: latest)"),
+    snapshot_id: int | None = typer.Option(
+        None, "--snapshot-id", "-s", help="Process snapshot ID (default: latest)"
+    ),
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
     debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
     jobs: int = typer.Option(32, "--jobs", "-j", help="Max parallel symbol resolutions"),
@@ -1255,7 +1328,7 @@ async def decode_address(
         from blackadder.binutils import resolve_symbol
         from blackadder.db import ProcessDatabase
 
-        rows: list[dict] = []
+        rows: list[dict[str, Any]] = []
 
         if mapped:
             db_proc = ProcessDatabase(shared_mgr, config)
@@ -1268,28 +1341,40 @@ async def decode_address(
                     continue
                 bin_path, offset, _binary_id = binary_info
                 symbol = await resolve_symbol(bin_path, offset, config)
-                row = {"address": addr, "binary": bin_path, "offset": offset, "symbol": symbol}
+                resolved_row = {
+                    "address": addr,
+                    "binary": bin_path,
+                    "offset": offset,
+                    "symbol": symbol,
+                }
                 if need_db_lookup and rootfs_db_obj:
                     sym_info = await rootfs_db_obj.find_symbol_at_offset(bin_path, offset)
-                    row["sym_type"] = sym_info["sym_type"] if sym_info else "?"
-                    row["section"] = sym_info["section"] if sym_info else "?"
-                rows.append(row)
+                    resolved_row["sym_type"] = sym_info["sym_type"] if sym_info else "?"
+                    resolved_row["section"] = sym_info["section"] if sym_info else "?"
+                rows.append(resolved_row)
 
         else:  # unmapped
-            bin_path = binary_file
+            standalone_path = binary_file
+            if standalone_path is None:
+                raise RuntimeError("Binary path is required for unmapped addresses")
             for offset in parsed_addrs:
-                symbol = await resolve_symbol(bin_path, offset, config)
-                row = {"address": offset, "binary": bin_path, "offset": offset, "symbol": symbol}
+                symbol = await resolve_symbol(standalone_path, offset, config)
+                resolved_row = {
+                    "address": offset,
+                    "binary": standalone_path,
+                    "offset": offset,
+                    "symbol": symbol,
+                }
                 if need_db_lookup and rootfs_db_obj:
-                    sym_info = await rootfs_db_obj.find_symbol_at_offset(bin_path, offset)
-                    row["sym_type"] = sym_info["sym_type"] if sym_info else "?"
-                    row["section"] = sym_info["section"] if sym_info else "?"
-                rows.append(row)
+                    sym_info = await rootfs_db_obj.find_symbol_at_offset(standalone_path, offset)
+                    resolved_row["sym_type"] = sym_info["sym_type"] if sym_info else "?"
+                    resolved_row["section"] = sym_info["section"] if sym_info else "?"
+                rows.append(resolved_row)
 
         # Output
         if show_name:
-            for row in rows:
-                console.print(row["symbol"])
+            for display_row in rows:
+                console.print(display_row["symbol"])
         else:
             table = Table(title="Address Resolution")
             table.add_column("Address", style=_theme.address)
@@ -1302,15 +1387,15 @@ async def decode_address(
             if show_section or show_full:
                 table.add_column("Section", style=_theme.section)
 
-            for row in rows:
-                cells = [f"{row['address']:#x}"]
+            for display_row in rows:
+                cells = [f"{display_row['address']:#x}"]
                 if mapped:
-                    cells += [row["binary"], f"{row['offset']:#x}"]
-                cells.append(row["symbol"])
+                    cells += [display_row["binary"], f"{display_row['offset']:#x}"]
+                cells.append(display_row["symbol"])
                 if show_type or show_full:
-                    cells.append(row.get("sym_type", "?"))
+                    cells.append(display_row.get("sym_type", "?"))
                 if show_section or show_full:
-                    cells.append(row.get("section", "?"))
+                    cells.append(display_row.get("section", "?"))
                 table.add_row(*cells)
 
             console.print(table)
@@ -1328,9 +1413,7 @@ async def decode_address(
 async def analyse_memory(
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
     debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
-    maps_file: str | None = typer.Option(
-        None, "--maps", "-m", help="Path to /proc/PID/maps file"
-    ),
+    maps_file: str | None = typer.Option(None, "--maps", "-m", help="Path to /proc/PID/maps file"),
     pid: int | None = typer.Option(None, "--pid", "-p", help="Running process PID"),
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
@@ -1392,6 +1475,8 @@ async def analyse_memory(
             process = await db_proc.load_maps(pid, maps_text)
 
         console.print(f"[blue]Analyzing memory layout ({len(process.mappings)} regions)...[/blue]")
+        if process.id is None:
+            raise RuntimeError("Process snapshot was not assigned an ID")
         result = await db_proc.analyze_memory_layout(process.id)
 
         console.print()
@@ -1420,9 +1505,13 @@ async def analyse_memory(
 
 @app.command()
 async def analyse_deadlock(
-    snapshot_id: int | None = typer.Option(None, "--snapshot-id", "-s", help="ProcessSnapshot ID to analyze (default: latest)"),
+    snapshot_id: int | None = typer.Option(
+        None, "--snapshot-id", "-s", help="ProcessSnapshot ID to analyze (default: latest)"
+    ),
     lock_state_file: str | None = typer.Option(
-        None, "--lock-state", "-L",
+        None,
+        "--lock-state",
+        "-L",
         help="Path to find_deadlock GDB output (enables exact mutex ownership analysis)",
     ),
     output_json: bool = typer.Option(False, "--json", help="Output as JSON instead of Rich tables"),
@@ -1468,6 +1557,7 @@ async def analyse_deadlock(
         if output_json:
             import json
             from dataclasses import asdict
+
             console.print(json.dumps(asdict(report), indent=2))
             return
 
@@ -1493,7 +1583,9 @@ async def analyse_deadlock(
         if report.cycles:
             for i, cycle in enumerate(report.cycles, 1):
                 lvl_color = {
-                    "certain": "red", "probable": "yellow", "possible": "cyan",
+                    "certain": "red",
+                    "probable": "yellow",
+                    "possible": "cyan",
                 }.get(cycle.evidence_level, "white")
                 console.print()
                 console.print(
@@ -1535,7 +1627,9 @@ async def analyse_deadlock(
 
 @app.command()
 async def report(
-    snapshot_id: int | None = typer.Option(None, "--snapshot-id", "-s", help="ProcessSnapshot ID (default: latest)"),
+    snapshot_id: int | None = typer.Option(
+        None, "--snapshot-id", "-s", help="ProcessSnapshot ID (default: latest)"
+    ),
     output_json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """
@@ -1555,7 +1649,13 @@ async def report(
     from sqlmodel import select as sql_select
 
     from blackadder.crash_patterns import CrashPatternEngine
-    from blackadder.models import BacktraceEntry, MemoryMapping, ProcessRegisterState, ProcessSnapshot, Thread
+    from blackadder.models import (
+        BacktraceEntry,
+        MemoryMapping,
+        ProcessRegisterState,
+        ProcessSnapshot,
+        Thread,
+    )
 
     config = _get_config_or_default()
 
@@ -1575,21 +1675,47 @@ async def report(
                 console.print(f"[red]Error: Snapshot #{snapshot_id} not found.[/red]")
                 raise typer.Exit(1)
 
-            threads = (await session.execute(  # type: ignore
-                sql_select(Thread).where(Thread.process_id == snapshot_id)
-            )).scalars().all()
+            threads = (
+                (
+                    await session.execute(  # type: ignore
+                        sql_select(Thread).where(Thread.process_id == snapshot_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
-            backtraces = (await session.execute(  # type: ignore
-                sql_select(BacktraceEntry).where(BacktraceEntry.process_id == snapshot_id)
-            )).scalars().all()
+            backtraces = (
+                (
+                    await session.execute(  # type: ignore
+                        sql_select(BacktraceEntry).where(BacktraceEntry.process_id == snapshot_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
-            mappings = (await session.execute(  # type: ignore
-                sql_select(MemoryMapping).where(MemoryMapping.process_id == snapshot_id)
-            )).scalars().all()
+            mappings = (
+                (
+                    await session.execute(  # type: ignore
+                        sql_select(MemoryMapping).where(MemoryMapping.process_id == snapshot_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
-            register_states = (await session.execute(  # type: ignore
-                sql_select(ProcessRegisterState).where(ProcessRegisterState.process_id == snapshot_id)
-            )).scalars().all()
+            register_states = (
+                (
+                    await session.execute(  # type: ignore
+                        sql_select(ProcessRegisterState).where(
+                            ProcessRegisterState.process_id == snapshot_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         deadlock_report = await db_proc.get_deadlock_report(snapshot_id)
         memory_result = await db_proc.analyze_memory_layout(snapshot_id)
@@ -1620,9 +1746,7 @@ async def report(
 
         # ── Rich output ───────────────────────────────────────────────────────
         console.print()
-        console.print(
-            f"[bold cyan]═══ Blackadder Debug Report ═══[/bold cyan]"
-        )
+        console.print("[bold cyan]═══ Blackadder Debug Report ═══[/bold cyan]")
 
         # 1. Header
         src = snapshot.source_type or "unknown"
@@ -1664,7 +1788,9 @@ async def report(
         anomalies = memory_result.get("anomalies", [])
         corruption_risk = memory_result.get("corruption_risk", 0.0)
         if anomalies:
-            risk_color = "red" if corruption_risk > 0.3 else "yellow" if corruption_risk > 0.1 else "green"
+            risk_color = (
+                "red" if corruption_risk > 0.3 else "yellow" if corruption_risk > 0.1 else "green"
+            )
             console.print(
                 f"  Corruption risk: [{risk_color}]{corruption_risk:.0%}[/{risk_color}]  "
                 f"({memory_result.get('corruption_count', 0)} region(s))"
@@ -1680,11 +1806,12 @@ async def report(
         console.print()
         console.print("[bold]Deadlock Analysis[/bold]")
         dl_color = {
-            "certain": "red", "probable": "yellow", "possible": "cyan", "none": "green",
+            "certain": "red",
+            "probable": "yellow",
+            "possible": "cyan",
+            "none": "green",
         }.get(deadlock_report.evidence_level, "white")
-        console.print(
-            f"  Evidence: [{dl_color}]{deadlock_report.evidence_level}[/{dl_color}]"
-        )
+        console.print(f"  Evidence: [{dl_color}]{deadlock_report.evidence_level}[/{dl_color}]")
         if deadlock_report.evidence_level != "none":
             for cycle in deadlock_report.cycles:
                 console.print(
@@ -1746,7 +1873,9 @@ async def report(
 
 @app.command()
 async def tag(
-    args: list[str] = typer.Argument(default=None, help="[SNAPSHOT_ID] TAG  — snapshot ID is optional (default: latest)"),
+    args: list[str] = typer.Argument(
+        default=None, help="[SNAPSHOT_ID] TAG  — snapshot ID is optional (default: latest)"
+    ),
 ) -> None:
     """
     Set or update the tag on an existing process snapshot.
@@ -1759,9 +1888,10 @@ async def tag(
         baldrick --db session.db tag crash-2026
         baldrick --db session.db tag 1 ""
     """
-    from blackadder.models import ProcessSnapshot
     from sqlmodel import select as sql_select
+
     from blackadder.db import ProcessDatabase
+    from blackadder.models import ProcessSnapshot
 
     # Parse args: either [tag] or [snapshot_id, tag]
     snapshot_id: int | None = None
@@ -1814,230 +1944,29 @@ async def tag(
         raise typer.Exit(1)
 
 
-@app.command()
-def query(
-    args: list[str] = typer.Argument(
-        default=None,
-        help=(
-            "Query name followed by optional key=value params. "
-            "Use 'list' to show all queries. "
-            "Use sql=\"SELECT ...\" to run inline SQL. "
-            "Examples: query threads id=1 | query sql=\"SELECT * FROM processsnapshot\""
-        ),
-    ),
-    param: list[str] = typer.Option(
-        [], "--param", "-p", help="Query parameter as key=value (can be repeated; alternative to positional key=value)"
-    ),
-    tag: str | None = typer.Option(None, "--tag", "-T", help="Filter snapshots by tag"),
-    fmt: str = typer.Option(
-        "rich", "--format", "-f", help="Output format: rich, json, csv"
-    ),
-) -> None:
-    """
-    Run a named SQL query against the database.
-
-    Parameters can be passed as positional key=value arguments after the query name.
-    Inline SQL is run by passing sql="SELECT ..." as the first argument.
-
-    Examples:
-        baldrick --db session.db query list
-        baldrick --db session.db query snapshots
-        baldrick --db session.db query snapshots --tag crash-2026
-        baldrick --db session.db query mappings id=1
-        baldrick --db session.db query threads id=1
-        baldrick --db session.db query libs --tag crash-2026
-        baldrick --db session.db query symbols binary=libc.so.6 --format csv
-        baldrick --db session.db query 'sql="SELECT id, pid, tag FROM processsnapshot"'
-    """
-    from blackadder.queries import load_query_registry
-    from blackadder.query import BlackadderQuery, _db_path, run_query
-
-    registry = load_query_registry()
-
-    if not args:
-        console.print("[red]Query name required. Use 'list' to show available queries.[/red]")
-        raise typer.Exit(1)
-
-    # Split args into: name, positional key=value pairs
-    # First arg is either the query name or sql="..."
-    first = args[0]
-    rest = args[1:]
-
-    # Detect inline SQL: sql="SELECT ..." or sql=SELECT... (first arg starts with sql=)
-    inline_sql: str | None = None
-    name: str
-    if first.startswith("sql="):
-        inline_sql = first[4:].strip().strip('"').strip("'")
-        # Any remaining args are ignored for inline SQL
-        name = "sql"
-    else:
-        name = first
-
-    if name == "list":
-        table = Table(title="Available Queries")
-        table.add_column("Name", style=_theme.symbol, no_wrap=True)
-        table.add_column("Params", style=_theme.flags, no_wrap=True)
-        table.add_column("Description", style=_theme.description)
-        for qdef in sorted(registry.values(), key=lambda q: q.name):
-            table.add_row(
-                qdef.name,
-                ", ".join(f":{p}" for p in qdef.params) if qdef.params else "—",
-                qdef.description,
-            )
-        console.print(table)
-        return
-
-    config = _get_config_or_default()
-    db_url = _global_db or config.db
-    db_file = _db_path(db_url) if db_url.startswith("sqlite") else db_url
-
-    try:
-        import polars as pl
-    except ImportError:
-        console.print("[red]polars is required for query command. Install with: pip install polars[/red]")
-        raise typer.Exit(1)
-
-    # Inline SQL mode
-    if name == "sql":
-        if not inline_sql:
-            console.print("[red]sql=<SQL> is required when using inline SQL. Example: query 'sql=\"SELECT * FROM processsnapshot\"'[/red]")
-            raise typer.Exit(1)
-        try:
-            df = run_query(db_file, inline_sql)
-        except Exception as e:
-            console.print(f"[red]Query failed: {e}[/red]")
-            raise typer.Exit(1)
-        title = "sql"
-    else:
-        if name not in registry:
-            console.print(f"[red]Unknown query: {name!r}. Use 'list' to see available queries.[/red]")
-            raise typer.Exit(1)
-
-        # Collect params: positional key=value args + --param options
-        params: dict[str, str] = {}
-        for kv in list(rest) + list(param):
-            if "=" not in kv:
-                console.print(f"[red]Invalid parameter: {kv!r} (expected key=value)[/red]")
-                raise typer.Exit(1)
-            k, v = kv.split("=", 1)
-            params[k.strip()] = v.strip()
-
-        qdef = registry[name]
-
-        # Route --tag: for snapshot queries (params include 'id'), pass tag to run_query
-        # for resolution.  For other queries (e.g. snapshots), post-filter on tag column.
-        post_filter_tag: str | None = None
-        if tag:
-            if "id" in qdef.params and "id" not in params:
-                params["tag"] = tag  # run_query will resolve tag → snapshot id
-            else:
-                post_filter_tag = tag  # post-filter on result 'tag' column
-
-        try:
-            q = BlackadderQuery(db_file)
-            df = q.run(name, **params)
-        except KeyError as e:
-            console.print(f"[red]Error: {e}[/red]")
-            raise typer.Exit(1)
-        except Exception as e:
-            console.print(f"[red]Query failed: {e}[/red]")
-            raise typer.Exit(1)
-
-        if post_filter_tag and "tag" in df.columns:
-            df = df.filter(pl.col("tag") == post_filter_tag)
-
-        title = name
-
-    if df.is_empty():
-        console.print("[yellow](no results)[/yellow]")
-        return
-
-    fmt = fmt.lower()
-
-    if fmt == "json":
-        console.print(df.write_json())
-    elif fmt == "csv":
-        console.print(df.write_csv(), end="")
-    else:  # rich (default)
-        table = Table(title=title)
-        for col in df.columns:
-            table.add_column(col, style=column_style(col, _theme), no_wrap=False)
-        for row in df.iter_rows():
-            table.add_row(*[format_value(col, v, _theme) for col, v in zip(df.columns, row)])
-        console.print(table)
-
-
-@app.command()
-def schema() -> None:
-    """
-    Show the database schema — all tables with their columns and types.
-
-    Example:
-        baldrick --db session.db schema
-    """
-    import sqlite3
-    from blackadder.query import _db_path
-
-    config = _get_config_or_default()
-    db_url = _global_db or config.db
-    db_file = _db_path(db_url) if db_url.startswith("sqlite") else db_url
-
-    try:
-        conn = sqlite3.connect(db_file)
-    except Exception as e:
-        console.print(f"[red]Cannot open database: {e}[/red]")
-        raise typer.Exit(1)
-
-    try:
-        tables = [
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-            ).fetchall()
-        ]
-        if not tables:
-            console.print("[yellow]No tables found in database.[/yellow]")
-            return
-
-        for table_name in tables:
-            cols = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-            t = Table(title=table_name, title_style=f"bold {_theme.section}")
-            t.add_column("Column", style=_theme.symbol, no_wrap=True)
-            t.add_column("Type", style=_theme.flags, no_wrap=True)
-            t.add_column("NotNull", style=_theme.meta, no_wrap=True)
-            t.add_column("Default", style=_theme.description, no_wrap=True)
-            t.add_column("PK", style=_theme.meta, no_wrap=True)
-            for col in cols:
-                # col: (cid, name, type, notnull, dflt_value, pk)
-                _, col_name, col_type, notnull, dflt, pk = col
-                t.add_row(
-                    col_name,
-                    col_type or "",
-                    "✓" if notnull else "",
-                    str(dflt) if dflt is not None else "",
-                    str(pk) if pk else "",
-                )
-            console.print(t)
-    finally:
-        conn.close()
-
-
-@app.command()
-def version() -> None:
-    """Show version information."""
-    import blackadder
-
-    console.print(f"Baldrick {blackadder.__version__}")
-    console.print(f"Author: {blackadder.__author__}")
+register_query_command(
+    app,
+    console,
+    database_url=lambda: _global_db or _get_config_or_default().db,
+    theme=lambda: _theme,
+)
+register_meta_commands(
+    app,
+    console,
+    database_url=lambda: _global_db or _get_config_or_default().db,
+    theme=lambda: _theme,
+)
 
 
 def main():
     """Entry point for baldrick CLI."""
     import asyncio
-    import click
     import os
 
+    import click
+
     from blackadder.queries import expand_aliases
+
     sys.argv[1:] = expand_aliases(sys.argv[1:])
 
     result = app(standalone_mode=False)

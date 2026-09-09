@@ -7,8 +7,10 @@ Covers:
 """
 
 import json
+
 import pytest
 import pytest_asyncio
+from sqlmodel import select
 
 from blackadder.config import BlackadderConfig
 from blackadder.db import AsyncDatabaseManager, ProcessDatabase
@@ -20,8 +22,6 @@ from blackadder.models import (
     ProcessSnapshot,
     Thread,
 )
-from sqlmodel import select
-
 
 # ============================================================================
 # Fixtures
@@ -85,9 +85,7 @@ async def _make_snapshot(db: ProcessDatabase, tag=None, pid=None) -> ProcessSnap
         snap_id = snap.id
 
     async with db.manager.get_session() as session:
-        result = await session.execute(
-            select(ProcessSnapshot).where(ProcessSnapshot.id == snap_id)
-        )
+        result = await session.execute(select(ProcessSnapshot).where(ProcessSnapshot.id == snap_id))
         return result.scalars().first()
 
 
@@ -112,7 +110,6 @@ async def _add_mapping(db: ProcessDatabase, process_id: int, start: int, end: in
 
 @pytest.mark.asyncio
 class TestResolveSnapshot:
-
     async def test_rule1_no_tag_no_id_returns_none(self, db):
         """No tag, no id → always create new."""
         result = await db.resolve_snapshot(tag=None, snapshot_id=None)
@@ -158,7 +155,7 @@ class TestResolveSnapshot:
 
     async def test_rule4_tag_belongs_to_other_snapshot(self, db):
         """tag belongs to a different snapshot → raise DatabaseConstraintError."""
-        snap_a = await _make_snapshot(db, tag="alpha")
+        await _make_snapshot(db, tag="alpha")
         snap_b = await _make_snapshot(db, tag=None)
         with pytest.raises(DatabaseConstraintError, match="alpha"):
             await db.resolve_snapshot(tag="alpha", snapshot_id=snap_b.id)
@@ -171,7 +168,6 @@ class TestResolveSnapshot:
 
 @pytest.mark.asyncio
 class TestMergeMaps:
-
     async def test_new_mappings_are_added(self, db):
         snap = await _make_snapshot(db)
         await db.merge_into_snapshot(snap, maps_text=MAPS_A, rootfs="/nonexistent")
@@ -229,15 +225,12 @@ class TestMergeMaps:
 
 @pytest.mark.asyncio
 class TestMergeGdbDump:
-
     async def test_new_threads_created(self, db):
         snap = await _make_snapshot(db)
         await db.merge_into_snapshot(snap, gdb_text=GDB_DUMP_SIMPLE)
 
         async with db.manager.get_session() as session:
-            result = await session.execute(
-                select(Thread).where(Thread.process_id == snap.id)
-            )
+            result = await session.execute(select(Thread).where(Thread.process_id == snap.id))
             threads = result.scalars().all()
 
         assert len(threads) == 2
@@ -249,9 +242,7 @@ class TestMergeGdbDump:
         await db.merge_into_snapshot(snap, gdb_text=GDB_DUMP_SIMPLE)
 
         async with db.manager.get_session() as session:
-            result = await session.execute(
-                select(Thread).where(Thread.process_id == snap.id)
-            )
+            result = await session.execute(select(Thread).where(Thread.process_id == snap.id))
             names = {t.name for t in result.scalars().all()}
 
         assert "worker" in names
@@ -292,9 +283,7 @@ class TestMergeGdbDump:
 
         async with db.manager.get_session() as session:
             result = await session.execute(
-                select(Thread).where(
-                    (Thread.process_id == snap.id) & (Thread.tid == 200)
-                )
+                select(Thread).where((Thread.process_id == snap.id) & (Thread.tid == 200))
             )
             t = result.scalars().first()
         assert t.name == "app"
@@ -305,9 +294,7 @@ class TestMergeGdbDump:
 
         async with db.manager.get_session() as session:
             result = await session.execute(
-                select(ProcessRegisterState).where(
-                    ProcessRegisterState.process_id == snap.id
-                )
+                select(ProcessRegisterState).where(ProcessRegisterState.process_id == snap.id)
             )
             regs = result.scalars().all()
 
@@ -323,9 +310,7 @@ class TestMergeGdbDump:
 
         async with db.manager.get_session() as session:
             result = await session.execute(
-                select(ProcessRegisterState).where(
-                    ProcessRegisterState.process_id == snap.id
-                )
+                select(ProcessRegisterState).where(ProcessRegisterState.process_id == snap.id)
             )
             assert len(result.scalars().all()) == 1
 
@@ -337,10 +322,9 @@ class TestMergeGdbDump:
 
 @pytest.mark.asyncio
 class TestMergeMetadata:
-
     async def test_tag_set_when_none(self, db):
         snap = await _make_snapshot(db, tag=None)
-        updated = await db.merge_into_snapshot(snap, gdb_text=GDB_DUMP_SIMPLE, new_tag="crash")
+        await db.merge_into_snapshot(snap, gdb_text=GDB_DUMP_SIMPLE, new_tag="crash")
 
         async with db.manager.get_session() as session:
             result = await session.execute(
@@ -369,12 +353,24 @@ class TestMergeMetadata:
         )
 
         async with db.manager.get_session() as session:
-            a = (await session.execute(
-                select(ProcessSnapshot).where(ProcessSnapshot.id == snap_a.id)
-            )).scalars().first()
-            b = (await session.execute(
-                select(ProcessSnapshot).where(ProcessSnapshot.id == snap_b.id)
-            )).scalars().first()
+            a = (
+                (
+                    await session.execute(
+                        select(ProcessSnapshot).where(ProcessSnapshot.id == snap_a.id)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            b = (
+                (
+                    await session.execute(
+                        select(ProcessSnapshot).where(ProcessSnapshot.id == snap_b.id)
+                    )
+                )
+                .scalars()
+                .first()
+            )
 
         assert b.tag == "shared"
         assert a.tag is None

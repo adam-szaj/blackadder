@@ -5,6 +5,7 @@ Tests region classification, anomaly detection, and corruption detection.
 """
 
 import pytest
+
 from blackadder.config import BlackadderConfig
 from blackadder.memory_analyzer import MemoryAnalyzer
 from blackadder.models import MemoryRegionType
