@@ -1,3 +1,4 @@
 [submodule "tests/gdb-scripts"]
 	path = tests/gdb-scripts
 	url = ../gdb-scripts
+	branch = refactor/gdb-plugin
