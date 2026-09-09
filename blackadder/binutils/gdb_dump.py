@@ -239,6 +239,7 @@ class LockStateEntry:
     lock_symbol: str | None  # Variable name e.g. "m1", "rw1"
     owner_tid: int | None  # TID of thread holding the lock (None = unknown)
     reader_count: int  # For rwlock_read: number of active readers
+    confidence: str = "unknown"  # certain | heuristic | unknown
 
 
 def parse_lock_state(text: str) -> list[LockStateEntry]:
@@ -301,6 +302,7 @@ def parse_lock_state(text: str) -> list[LockStateEntry]:
                 lock_symbol=d.get("lock_symbol") or None,
                 owner_tid=d.get("owner_tid"),  # int or None
                 reader_count=int(d.get("reader_count", 0)),
+                confidence=d.get("confidence", "unknown"),
             )
         )
 

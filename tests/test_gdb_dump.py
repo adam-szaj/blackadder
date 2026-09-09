@@ -416,6 +416,17 @@ class TestParseLockState:
         assert entries[0].waiting_for_addr == 0x7F001234
         assert entries[1].waiting_for_addr == 0x7F005678
 
+    def test_confidence_field_is_backward_compatible(self):
+        text = (
+            '{"pid":1,"tid":2,"gdb_thread_num":1,"blocking_function":"syscall",'
+            '"lock_type":"unknown","confidence":"heuristic"}'
+        )
+
+        entries = parse_lock_state(text)
+
+        assert entries[0].confidence == "heuristic"
+        assert parse_lock_state(_LOCK_STATE_WITH_MARKERS)[0].confidence == "unknown"
+
     def test_real_deadlock_test_output(self):
         """Simulate actual output from deadlock_test + find_deadlock.py."""
         text = """\
