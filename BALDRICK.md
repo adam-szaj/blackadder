@@ -196,7 +196,7 @@ Example — live process:
 
 Example — with exact mutex ownership (GDB find_deadlock extension):
     gdb -batch \
-        -ex "source tests/gdb-scripts/_gdb/find_deadlock.py" \
+        -ex "source $(baldrick gdb-path)" \
         -ex "find_deadlock" \
         ./deadlock_test 12345 > lock.txt
     baldrick --db session.db analyse-deadlock --snapshot-id 1 --lock-state lock.txt
@@ -296,12 +296,20 @@ Usage:
 
 ## GDB Plugin
 
-`tests/gdb-scripts/_gdb/blackadder_gdb.py` — Python plugin for GDB. Imports blackadder directly (no subprocess for queries). Reads live memory via GDB inferior API. Requires a process snapshot in DB (`baldrick-load` or `baldrick load-process` first).
+The separately distributed `blackadder-gdb` package installs Blackadder as its
+dependency. Database-backed commands require a snapshot created with `bdr load`
+or `baldrick load-process`.
 
 ### Setup
 
+```sh
+python -m pip install blackadder-gdb
+gdb -ex "source $(baldrick gdb-path)" ./myapp
 ```
-(gdb) source /path/to/tests/gdb-scripts/_gdb/blackadder_gdb.py
+
+Inside GDB:
+
+```gdb
 (gdb) set baldrick-db /path/to/session.db
 (gdb) set baldrick-snapshot 1      # optional, default: latest
 ```
@@ -310,57 +318,57 @@ Or via env var: `export BALDRICK_DB=/path/to/session.db`
 
 ### Commands
 
-**`baldrick-explain <addr>`**
+**`bdr explain <addr>`**
 
 Describe address: memory region + perms, binary, nearest symbol + offset + section, DWARF type name + size, struct fields with live values.
 
-    (gdb) baldrick-explain $rdi
-    (gdb) baldrick-explain 0x7f1234567890
-    (gdb) baldrick-explain $rsp+8
+    (gdb) bdr explain $rdi
+    (gdb) bdr explain 0x7f1234567890
+    (gdb) bdr explain $rsp+8
 
-**`baldrick-cast <addr> <type> [binary]`**
+**`bdr cast <addr> <type> [binary]`**
 
 Read memory at addr and cast to named C struct. Binary auto-detected from mappings if omitted.
 
-    (gdb) baldrick-cast $rdi pthread_mutex_t
-    (gdb) baldrick-cast 0x7f1234 __pthread_mutex_s libpthread.so.0
+    (gdb) bdr cast $rdi pthread_mutex_t
+    (gdb) bdr cast 0x7f1234 __pthread_mutex_s libpthread.so.0
 
 Requires types loaded: `baldrick --db s.db load-types --binary libpthread.so.0`
 
-**`baldrick-load`**
+**`bdr load`**
 
 Load current process state into DB (mappings, threads). Calls `baldrick load-process --pid <pid>` via subprocess.
 
-    (gdb) baldrick-load
+    (gdb) bdr load
 
-**`baldrick-report`**
+**`bdr report`**
 
 Run full debug report: threads, memory anomalies, deadlock analysis, crash patterns.
 
-    (gdb) baldrick-report
+    (gdb) bdr report
 
-**`baldrick-info registers`**
+**`bdr info registers`**
 
 Like `info registers` but annotates pointer-like values with region/symbol from DB.
 
-    (gdb) baldrick-info registers
+    (gdb) bdr info registers
     rax  0x00007f1234567890  →  [heap]  pthread_mutex_t  __pthread_mutex_s
     rsp  0x00007fff12340000  →  [stack]
     rip  0x00007f1234001234  →  libc.so.6  malloc+0x24  (.text)
 
-**`baldrick-info frame`**
+**`bdr info frame`**
 
 Like `info frame` + pointer analysis of arguments and local variables.
 
-    (gdb) baldrick-info frame
+    (gdb) bdr info frame
 
-**`baldrick-disasm [addr] [count]`**
+**`bdr disasm [addr] [count]`**
 
 Disassemble with address/operand annotations. Annotates immediate addresses and RIP-relative operands.
 
-    (gdb) baldrick-disasm
-    (gdb) baldrick-disasm $pc 20
-    (gdb) baldrick-disasm 0x7f1234001234 8
+    (gdb) bdr disasm
+    (gdb) bdr disasm $pc 20
+    (gdb) bdr disasm 0x7f1234001234 8
 
 ### Typical workflow
 
@@ -369,15 +377,14 @@ Disassemble with address/operand annotations. Annotates immediate addresses and 
 baldrick --db /tmp/debug.db load-process --pid 12345
 baldrick --db /tmp/debug.db load-types --binary libpthread.so.0
 
-# 2. In GDB
-gdb -q ./myapp 12345
-(gdb) source tests/gdb-scripts/_gdb/blackadder_gdb.py
+# 2. In GDB (plugin loaded through its installed path)
+gdb -q -ex "source $(baldrick gdb-path)" ./myapp 12345
 (gdb) set baldrick-db /tmp/debug.db
-(gdb) baldrick-info registers
-(gdb) baldrick-explain $rdi
-(gdb) baldrick-cast $rdi pthread_mutex_t
-(gdb) baldrick-disasm $pc 15
-(gdb) baldrick-report
+(gdb) bdr info registers
+(gdb) bdr explain $rdi
+(gdb) bdr cast $rdi pthread_mutex_t
+(gdb) bdr disasm $pc 15
+(gdb) bdr report
 ```
 
 Note: GDB live attach requires `ptrace_scope=0`:

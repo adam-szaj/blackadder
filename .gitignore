@@ -73,9 +73,6 @@ local_settings.py
 /tmp/
 /test_*.txt
 
-# Old scripts (legacy code)
-scripts/
-
 # Plan files
 .claude/
 .gdb_history

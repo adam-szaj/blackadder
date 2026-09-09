@@ -1526,7 +1526,7 @@ async def analyse_deadlock(
       possible — wchan shows futex wait, multiple blocked threads
 
     For highest accuracy provide GDB lock state:
-        gdb -batch -ex "source _gdb/find_deadlock.py" -ex find_deadlock ./binary core \\
+        gdb -batch -ex "source $(baldrick gdb-path)" -ex find_deadlock ./binary core \\
           > lock.json
         baldrick --db session.db analyse-deadlock -s 1 --lock-state lock.json
 

@@ -23,7 +23,7 @@ jobs:
       - run: python -m pytest
       - run: python -m pytest tests/gdb-scripts/tests --no-cov
       - run: python -m compileall -q tests/gdb-scripts/_gdb
-      - run: g++ -std=c++17 -pthread -fsyntax-only tests/gdb-scripts/tests/*.cpp
+      - run: make -C tests/gdb-scripts/tests
 
   quality:
     runs-on: ubuntu-latest
@@ -39,4 +39,5 @@ jobs:
       - run: python -m ruff format --check blackadder tests
       - run: python -m ruff check blackadder tests
       - run: python -m ruff check tests/gdb-scripts
+      - run: python -m ruff format --check tests/gdb-scripts
       - run: python -m mypy blackadder

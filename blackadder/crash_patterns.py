@@ -233,7 +233,7 @@ class CrashPatternEngine:
 
         1. IP/PC < 0x1000 — jumped to NULL (null function pointer / vtable corruption).
 
-        2. Crash instruction available (from x/1i $pc captured during baldrick-load):
+        2. Crash instruction available (from x/1i $pc captured during bdr load):
            parse memory operands — if a register used as a memory base address has
            value < 0x1000, that is the null pointer being dereferenced.
            Example: "movl $0x2a,(%rdi)" with rdi=0x0 → certain null-deref via rdi.

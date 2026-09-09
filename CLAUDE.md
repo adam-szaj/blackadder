@@ -189,7 +189,7 @@ Guidance for Claude Code (claude.ai/code) in this repo.
 - `blackadder/cli/main.py`: +analyse-deadlock command
 - `blackadder/queries.py`: +deadlock-threads built-in query
 - `tests/test_deadlock_analyzer.py` (32 tests)
-- `tests/gdb-scripts/_gdb/find_deadlock.py`: GDB command ext (rewritten)
+- `blackadder-gdb` package: installed GDB commands, including `find_deadlock`
 
 **Key design**:
 - `_LOCK_SYMBOLS` frozenset: `__GI___pthread_mutex_lock`, `___pthread_mutex_lock`, `__GI___pthread_rwlock_wrlock/rdlock`, `__libc_do_syscall`
@@ -198,7 +198,7 @@ Guidance for Claude Code (claude.ai/code) in this repo.
 - N threads waiting on N unique addrs = deadlock; multiple on same = contention
 
 **`find_deadlock.py` GDB extension**:
-- Registered as `find_deadlock` GDB command: `gdb -batch -ex "source find_deadlock.py" -ex "find_deadlock" ...`
+- Registered as `find_deadlock` GDB command: `gdb -batch -ex "source $(baldrick gdb-path)" -ex "find_deadlock" ...`
 - Outputs `BALDRICK_LOCK_STATE_BEGIN` / one JSON line per blocked thread / `BALDRICK_LOCK_STATE_END`
 - Reads `mutex->__data.__owner` from outermost `___pthread_mutex_lock` frame (not innermost `__lll_lock_wait`)
 - Reads `rwlock->__data.__cur_writer` + `__readers` for rwlock
@@ -448,5 +448,5 @@ See `blackadder/binutils/resolver.py:parse_backtrace_auto()` for regex patterns.
 - Always semaphore-limit subprocess calls
 - Cache symbol lookups aggressively (50%+ hit rate typical)
 - `ProcessRegisterState.registers_json` = JSON dict `{reg_name: int_value}` — arch-agnostic
-- `find_deadlock.py` must be sourced in GDB before calling `find_deadlock`
+- The installed plugin must be sourced in GDB before calling `find_deadlock`
 - ptrace_scope must be 0 for GDB live attach: `echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope`

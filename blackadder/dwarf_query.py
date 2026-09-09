@@ -7,7 +7,7 @@ and struct field flattening from the canonical_dwarf_type / binary_dwarf_ref
 
 Used by:
   - blackadder/cli/main.py  (cast-mem command)
-  - tests/gdb-scripts/_gdb/blackadder_gdb.py  (GDB plugin)
+  - the separately installed blackadder-gdb plugin
 """
 
 from __future__ import annotations
