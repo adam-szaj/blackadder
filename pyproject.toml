@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "blackadder"
+name = "blackadder-debugger"
 version = "0.1.0"
 description = "High-level Linux binutils wrapper for debugging - backtrace decoding, symbol resolution, memory analysis"
 readme = "README.md"

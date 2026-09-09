@@ -16,6 +16,9 @@ Linux binutils wrapper for debug. Backtrace decode, symbol resolution, memory an
 Requires Python 3.12+ (tested with 3.14).
 
 ```bash
+# Published package
+pip install blackadder-debugger
+
 # Using uv (recommended)
 uv pip install -e .
 uv pip install -e ".[dev]"  # For development
