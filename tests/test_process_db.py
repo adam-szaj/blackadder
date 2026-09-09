@@ -51,6 +51,19 @@ async def test_address_to_binary_not_found(process_db, sample_maps_content):
 
 
 @pytest.mark.asyncio
+async def test_addresses_to_binaries_resolves_batch(process_db, sample_maps_content):
+    process = await process_db.load_maps(12345, sample_maps_content)
+    addresses = [0x555555554100, 0x7FFFF7E00100, 0xDEADBEEF]
+
+    results = await process_db.addresses_to_binaries(process.id, addresses)
+
+    assert results[0x555555554100] is not None
+    assert results[0x555555554100][1] == 0x100
+    assert results[0x7FFFF7E00100] is not None
+    assert results[0xDEADBEEF] is None
+
+
+@pytest.mark.asyncio
 async def test_parse_maps_lines():
     """Test _parse_maps_lines regex parsing."""
     lines = [

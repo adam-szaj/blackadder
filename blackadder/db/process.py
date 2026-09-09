@@ -320,49 +320,36 @@ class ProcessDatabase:
             Tuple of (binary_path, offset, binary_id) or None if address not found.
             binary_id may be None if binary is not in the database.
         """
-        logger.debug(
-            "resolving_address",
-            extra={
-                "pid": pid,
-                "address": hex(addr),
-            },
-        )
+        return (await self.addresses_to_binaries(pid, [addr]))[addr]
+
+    async def addresses_to_binaries(
+        self, pid: int, addresses: list[int]
+    ) -> dict[int, tuple[str, int, int | None] | None]:
+        """Resolve several virtual addresses with one database round trip."""
+        resolved: dict[int, tuple[str, int, int | None] | None] = {
+            address: None for address in addresses
+        }
+        if not addresses:
+            return resolved
 
         async with self.manager.get_session() as session:
-            statement = select(MemoryMapping).where(
-                (MemoryMapping.process_id == pid)
-                & (MemoryMapping.start_addr <= addr)
-                & (MemoryMapping.end_addr > addr)
-            )
-            result = await session.execute(statement)  # type: ignore
-            mapping = result.scalars().first()
-
-            if not mapping:
-                logger.debug(
-                    "address_not_found_in_mappings",
-                    extra={"pid": pid, "address": hex(addr)},
+            statement = (
+                select(MemoryMapping, ProcessBinary.binary_id)
+                .outerjoin(
+                    ProcessBinary,
+                    ProcessBinary.mapping_id == MemoryMapping.id,  # type: ignore[arg-type]
                 )
-                return None
-
-            offset = addr - mapping.start_addr + mapping.offset
-
-            # Look up binary_id from ProcessBinary for this mapping
-            pb_stmt = select(ProcessBinary).where(ProcessBinary.mapping_id == mapping.id)
-            pb_result = await session.execute(pb_stmt)  # type: ignore
-            pb = pb_result.scalars().first()
-            binary_id = pb.binary_id if pb else None
-
-            logger.debug(
-                "address_resolved",
-                extra={
-                    "pid": pid,
-                    "address": hex(addr),
-                    "binary": mapping.pathname,
-                    "offset": hex(offset),
-                    "binary_id": binary_id,
-                },
+                .where(MemoryMapping.process_id == pid)
             )
-            return mapping.pathname, offset, binary_id
+            rows = (await session.execute(statement)).all()
+
+        for address in resolved:
+            for mapping, binary_id in rows:
+                if mapping.start_addr <= address < mapping.end_addr:
+                    offset = address - mapping.start_addr + mapping.offset
+                    resolved[address] = mapping.pathname, offset, binary_id
+                    break
+        return resolved
 
     async def decode_backtrace(self, pid: int, addresses: list[int]) -> list[ResolvedFrame]:
         """
