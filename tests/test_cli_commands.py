@@ -22,4 +22,5 @@ def test_top_level_command_set_is_stable():
         "query",
         "schema",
         "version",
+        "gdb-path",
     }

@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Adam Szaj" }]
 dependencies = [
+    "click>=8.1",
     "sqlmodel>=0.0.14",
     "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.19",
@@ -35,6 +36,7 @@ dev = [
 
 [project.scripts]
 baldrick = "blackadder.cli.main:main"
+baldrick-python-paths = "blackadder.cli.gdb_support:print_python_paths"
 
 [tool.hatch.build.targets.wheel]
 packages = ["blackadder"]

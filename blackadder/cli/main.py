@@ -34,6 +34,7 @@ from rich.progress import (
 from rich.table import Table
 
 from blackadder.binutils import init_parser, parse_backtrace_auto
+from blackadder.cli.gdb_support import register_gdb_commands
 from blackadder.cli.meta_commands import register_meta_commands
 from blackadder.cli.query_commands import register_query_command
 from blackadder.config import BlackadderConfig
@@ -1956,6 +1957,7 @@ register_meta_commands(
     database_url=lambda: _global_db or _get_config_or_default().db,
     theme=lambda: _theme,
 )
+register_gdb_commands(app, console)
 
 
 def main():

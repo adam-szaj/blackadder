@@ -5,9 +5,10 @@ Provides backtrace decoding, symbol resolution, and memory analysis
 for debugging core dumps, process traces, and production issues.
 """
 
-__version__ = "0.1.0"
-__author__ = "Adam Szaj"
-
 from blackadder.query import BlackadderQuery
 
-__all__ = ["BlackadderQuery"]
+__version__ = "0.1.0"
+GDB_PLUGIN_API_VERSION = 1
+__author__ = "Adam Szaj"
+
+__all__ = ["BlackadderQuery", "GDB_PLUGIN_API_VERSION"]
