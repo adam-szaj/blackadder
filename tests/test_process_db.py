@@ -134,6 +134,27 @@ async def test_subprocess_semaphore_limits_resolve_frame(process_db, sample_maps
 
 
 @pytest.mark.asyncio
+async def test_deadlock_report_preserves_condition_waits(process_db, sample_maps_content):
+    process = await process_db.load_maps(12345, sample_maps_content)
+    sync_state = """\
+BALDRICK_LOCK_STATE_BEGIN
+BALDRICK_LOCK_STATE_END
+BALDRICK_COND_STATE_BEGIN
+{"record_type":"condition_wait","pid":12345,"tid":7,"gdb_thread_num":2,"blocking_function":"pthread_cond_wait","condition_address":"0x1050","mutex_address":"0x1028","same_containing_object":false,"wake_candidates":[],"confidence":"probable","abi_status":"supported","analysis_call_depth":3}
+BALDRICK_COND_STATE_END
+"""
+
+    report = await process_db.get_deadlock_report(process.id, sync_state)
+
+    assert report.evidence_level == "none"
+    assert len(report.condition_waits) == 1
+    assert report.condition_waits[0].condition_address == 0x1050
+    assert report.summary == (
+        "No mutex deadlock cycle detected; 1 condition-variable wait(s) reported."
+    )
+
+
+@pytest.mark.asyncio
 async def test_decode_backtrace_with_unmapped_address(process_db, sample_maps_content):
     """Test decode_backtrace with unmapped addresses."""
     process = await process_db.load_maps(12345, sample_maps_content)

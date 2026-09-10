@@ -1617,6 +1617,32 @@ async def analyse_deadlock(
                 )
             console.print(sus_table)
 
+        if report.lock_state:
+            console.print()
+            lock_table = Table(title="Mutex Wait Details", show_header=True)
+            lock_table.add_column("TID", style=_theme.meta, no_wrap=True)
+            lock_table.add_column("Mutex", style=_theme.address)
+            lock_table.add_column("Containing object", style=_theme.description)
+            lock_table.add_column("Owner / acquisition", style=_theme.symbol)
+            for entry in report.lock_state:
+                mutex = entry.lock_symbol or (
+                    f"{entry.waiting_for_addr:#x}" if entry.waiting_for_addr else "—"
+                )
+                object_name = (
+                    f"{entry.mutex_object.type_name} @ {entry.mutex_object.address:#x}"
+                    f" ({entry.mutex_object.field})"
+                    if entry.mutex_object
+                    else "—"
+                )
+                owner = f"TID {entry.owner_tid}" if entry.owner_tid else "unknown owner"
+                if entry.owner_acquisition:
+                    location = entry.owner_acquisition.function
+                    if entry.owner_acquisition.line:
+                        location += f":{entry.owner_acquisition.line}"
+                    owner += f"; {location} (d={entry.owner_acquisition.call_depth})"
+                lock_table.add_row(str(entry.tid), mutex, object_name, owner)
+            console.print(lock_table)
+
         if report.condition_waits:
             console.print()
             cond_table = Table(title="Condition Variable Waits", show_header=True)

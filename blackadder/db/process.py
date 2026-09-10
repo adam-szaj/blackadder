@@ -1035,6 +1035,11 @@ class ProcessDatabase:
         if lock_state_text:
             report.lock_state = lock_state or []
             report.condition_waits = parse_condition_state(lock_state_text)
+            if report.condition_waits and report.evidence_level == "none":
+                report.summary = (
+                    "No mutex deadlock cycle detected; "
+                    f"{len(report.condition_waits)} condition-variable wait(s) reported."
+                )
         return report
 
     async def analyze_memory_layout(
