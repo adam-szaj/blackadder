@@ -43,8 +43,8 @@ registers = MOCK_REGISTER_STATES["x86_64"]["code_pointer"]()
 ### 2. CLI Formatters & Commands (Phase 3.1)
 
 **Files**: 
-- `blackadder/cli/formatters.py` (200 lines)
-- `blackadder/cli/commands.py` (200 lines)
+- `baldrick/cli/formatters.py` (200 lines)
+- `baldrick/cli/commands.py` (200 lines)
 
 #### Formatters
 
@@ -78,7 +78,7 @@ Stub implementations of advanced analysis commands:
 
 ### 3. Register Interpreter (Phase 3.2)
 
-**File**: `blackadder/register_analyzer.py` (260 lines)
+**File**: `baldrick/register_analyzer.py` (260 lines)
 
 #### Core Classes
 
@@ -135,7 +135,7 @@ Stub implementations of advanced analysis commands:
 
 ### 4. Heap Analyzer (Phase 3.3)
 
-**File**: `blackadder/heap_analyzer.py` (350 lines)
+**File**: `baldrick/heap_analyzer.py` (350 lines)
 
 #### Core Classes
 
@@ -206,7 +206,7 @@ Stub implementations of advanced analysis commands:
 
 ### 5. Stack Validator (Phase 3.4)
 
-**File**: `blackadder/stack_validator.py` (300 lines)
+**File**: `baldrick/stack_validator.py` (300 lines)
 
 #### Core Classes
 
@@ -376,7 +376,7 @@ All modules designed for extension:
 
 ### New Files
 ```
-blackadder/
+baldrick/
   ├── register_analyzer.py       (260 lines, 84% coverage)
   ├── heap_analyzer.py           (350 lines, 94% coverage)
   ├── stack_validator.py         (300 lines, 97% coverage)
@@ -397,7 +397,7 @@ tests/
 
 ### Modified Files
 ```
-blackadder/
+baldrick/
   └── models.py                   (Fixed Optional[T] for SQLAlchemy 2.0)
   
 tests/

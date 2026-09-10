@@ -4,11 +4,11 @@
 
 ## Overview
 
-Production hardening of Blackadder's MVP (v0.1.0) with comprehensive error handling, input validation, resource limits, and structured logging. Following the pattern established in Phase 2.3 (memory analyzer), all modules now validate inputs at entry points and gracefully handle failures.
+Production hardening of Baldrick's MVP (v0.1.0) with comprehensive error handling, input validation, resource limits, and structured logging. Following the pattern established in Phase 2.3 (memory analyzer), all modules now validate inputs at entry points and gracefully handle failures.
 
 ## Completed Modules
 
-### 1. ✅ blackadder/memory_analyzer.py
+### 1. ✅ baldrick/memory_analyzer.py
 
 **Methods Updated**:
 - `classify_region()`: Input validation for addresses, permissions, pathname types
@@ -25,7 +25,7 @@ Production hardening of Blackadder's MVP (v0.1.0) with comprehensive error handl
 
 ---
 
-### 2. ✅ blackadder/binutils/coredump.py
+### 2. ✅ baldrick/binutils/coredump.py
 
 **Methods Updated**:
 - `parse_core_dump()`: File validation (exists, readable, size limit checking)
@@ -43,7 +43,7 @@ Production hardening of Blackadder's MVP (v0.1.0) with comprehensive error handl
 
 ---
 
-### 3. ✅ blackadder/binutils/hasher.py
+### 3. ✅ baldrick/binutils/hasher.py
 
 **Methods Updated**:
 - `compute_fingerprints()`: Binary file validation, size limits, comprehensive error handling
@@ -60,7 +60,7 @@ Production hardening of Blackadder's MVP (v0.1.0) with comprehensive error handl
 
 ---
 
-### 4. ✅ blackadder/binutils/matcher.py
+### 4. ✅ baldrick/binutils/matcher.py
 
 **Methods Updated**:
 - `find_matches()`: Threshold validation (0.0-1.0), type checking on all inputs
@@ -75,7 +75,7 @@ Production hardening of Blackadder's MVP (v0.1.0) with comprehensive error handl
 
 ---
 
-### 5. ✅ blackadder/db/process.py (Partial - 6 of 8 methods)
+### 5. ✅ baldrick/db/process.py (Partial - 6 of 8 methods)
 
 **Methods Updated**:
 - `load_maps()`: PID/maps_text validation, region count limit enforcement
@@ -136,7 +136,7 @@ async def method(self, arg: str, limit: int) -> dict:
 ## Exception Hierarchy Used
 
 ```
-BlackadderException (base)
+BaldrickException (base)
 ├── ValidationError → InvalidArgumentError
 ├── FileError → FileNotFoundError, FileAccessError, FileTooLargeError, FileFormatError
 ├── ELFError → ELFCoreDumpError
@@ -268,7 +268,7 @@ These methods are called internally after validation, so type hints + static che
 - [ ] Binary lookup methods: Handle not-found cases gracefully
 
 ### 3. CLI logging integration (cli/main.py)
-- [ ] Call `setup_logging()` from blackadder/logging_config.py on startup
+- [ ] Call `setup_logging()` from baldrick/logging_config.py on startup
 - [ ] Pass config.log_file and config.debug to setup_logging
 - [ ] Ensure all async command handlers have proper error handling
 
@@ -288,17 +288,17 @@ After Phase 1 completion, Phase 2 will add:
 
 ```bash
 # Verify syntax
-python3 -m py_compile blackadder/memory_analyzer.py \
-  blackadder/binutils/coredump.py \
-  blackadder/binutils/hasher.py \
-  blackadder/binutils/matcher.py \
-  blackadder/db/process.py
+python3 -m py_compile baldrick/memory_analyzer.py \
+  baldrick/binutils/coredump.py \
+  baldrick/binutils/hasher.py \
+  baldrick/binutils/matcher.py \
+  baldrick/db/process.py
 
 # Run existing tests
 python3 -m pytest tests/ -v
 
 # Check logging
-python3 -c "from blackadder.logging_config import setup_logging; \
+python3 -c "from baldrick.logging_config import setup_logging; \
   logger = setup_logging('DEBUG'); \
   logger.info('Logging configured')"
 ```
@@ -307,16 +307,16 @@ python3 -c "from blackadder.logging_config import setup_logging; \
 
 ## Files Modified
 
-1. blackadder/memory_analyzer.py ✅
-2. blackadder/binutils/coredump.py ✅
-3. blackadder/binutils/hasher.py ✅
-4. blackadder/binutils/matcher.py ✅
-5. blackadder/db/process.py ✅ (partial)
-6. blackadder/db/rootfs.py ⏳ (pending)
-7. blackadder/cli/main.py ⏳ (pending)
-8. blackadder/exceptions.py ✅ (prereq)
-9. blackadder/logging_config.py ✅ (prereq)
-10. blackadder/config.py ✅ (prereq)
+1. baldrick/memory_analyzer.py ✅
+2. baldrick/binutils/coredump.py ✅
+3. baldrick/binutils/hasher.py ✅
+4. baldrick/binutils/matcher.py ✅
+5. baldrick/db/process.py ✅ (partial)
+6. baldrick/db/rootfs.py ⏳ (pending)
+7. baldrick/cli/main.py ⏳ (pending)
+8. baldrick/exceptions.py ✅ (prereq)
+9. baldrick/logging_config.py ✅ (prereq)
+10. baldrick/config.py ✅ (prereq)
 11. HARDENING_PROGRESS.md ✅ (tracking)
 
 ---

@@ -8,8 +8,8 @@ from datetime import datetime
 
 import pytest
 
-from blackadder.binutils.resolver import parse_backtrace_auto
-from blackadder.models import (
+from baldrick.binutils.resolver import parse_backtrace_auto
+from baldrick.models import (
     Binary,
     MemoryMapping,
     ProcessSnapshot,

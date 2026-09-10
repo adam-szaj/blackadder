@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Blackadder** is a production-ready Linux debugging engine written in modern Python 3.12+ (asyncio, SQLModel, Pydantic, Typer). It provides:
+**Baldrick** is a production-ready Linux debugging engine written in modern Python 3.12+ (asyncio, SQLModel, Pydantic, Typer). It provides:
 - High-speed backtrace decoding via parallel address resolution
 - Binary metadata extraction (sections, symbols, debug info) using `objdump`/`readelf`
 - Process memory analysis from `/proc/PID/maps`
@@ -28,17 +28,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Core Modules**:
 
-1. **ORM Models** (`blackadder/models.py`)
+1. **ORM Models** (`baldrick/models.py`)
    - **Rootfs DB**: Binary, SectionHeader, Symbol, BinaryLocator, FunctionFingerprint, SymbolCache
    - **Process DB**: ProcessSnapshot, Thread, MemoryMapping, ProcessBinary, BacktraceEntry, ProcessRegisterState, MemoryRegionAnalysis
    - Pydantic models: BacktraceRequest, ResolvedFrame (with validators)
 
-2. **Async Database Layer** (`blackadder/db/`)
+2. **Async Database Layer** (`baldrick/db/`)
    - `base.py`: AsyncDatabaseManager wraps aiosqlite + connection pooling
    - `process.py`: ProcessDatabase — load-process (live/maps/coredump/GDB dump), backtrace decoding, memory analysis, deadlock report
    - `rootfs.py`: RootfsDatabase for binary metadata and fingerprint caching
 
-3. **Architecture Abstraction Layer** (`blackadder/arch/`)
+3. **Architecture Abstraction Layer** (`baldrick/arch/`)
    - `base.py`: Abstract Architecture class with register definitions and normalization
    - `x86.py`: X86Architecture (32-bit) and X86_64Architecture (64-bit) implementations
    - `arm.py`: ARMArchitecture (32-bit) and ARM64Architecture (64-bit) implementations
@@ -46,7 +46,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - Supports: x86, x86-64, ARM, ARM64, RISC-V; extensible for PowerPC, MIPS, etc.
    - Used by: FunctionHasher (instruction normalization), MemoryAnalyzer (stack detection)
 
-4. **Binutils Integration** (`blackadder/binutils/`)
+4. **Binutils Integration** (`baldrick/binutils/`)
    - `parser.py`: BinToolsParser wraps objdump/readelf with async subprocess limiting
    - `resolver.py`: Symbol resolution (addr2line + objdump fallback), backtrace format auto-detection
    - `hasher.py`: FunctionHasher extracts and normalizes assembly for fingerprinting
@@ -55,15 +55,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - `gdb_dump.py`: GDB text dump parser — threads, frames, registers, lock state (LockStateEntry)
 
 5. **Analysis Engines**
-   - `blackadder/memory_analyzer.py`: Classify regions, detect anomalies (RWX, executable heap, oversized)
-   - `blackadder/deadlock_analyzer.py`: 3-tier deadlock detection (futex syscall, backtrace symbols, wchan)
+   - `baldrick/memory_analyzer.py`: Classify regions, detect anomalies (RWX, executable heap, oversized)
+   - `baldrick/deadlock_analyzer.py`: 3-tier deadlock detection (futex syscall, backtrace symbols, wchan)
 
-6. **CLI** (`blackadder/cli/main.py`)
+6. **CLI** (`baldrick/cli/main.py`)
    - Commands: load, load-process, decode-backtrace, decode-address, analyse-memory, analyse-deadlock, tag, query, schema, version
    - Rich table output and progress bars
    - Configurable concurrency and caching
 
-7. **Configuration** (`blackadder/config.py`)
+7. **Configuration** (`baldrick/config.py`)
    - Pydantic Settings: env vars, .env file, auto-detected CPU count
    - Configurable: rootfs/process DB paths, tool paths, semaphore workers, cache sizes
 
@@ -78,10 +78,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `ProcessDatabase.identify_process_binaries_fuzzy()`: Fuzzy-match process binaries to rootfs candidates
 
 **Files**:
-- `blackadder/binutils/hasher.py` (217 lines)
-- `blackadder/binutils/matcher.py` (126 lines)
-- `blackadder/db/rootfs.py` (133 lines)
-- `blackadder/models.py`: FunctionFingerprint model + Binary.fingerprints relationship
+- `baldrick/binutils/hasher.py` (217 lines)
+- `baldrick/binutils/matcher.py` (126 lines)
+- `baldrick/db/rootfs.py` (133 lines)
+- `baldrick/models.py`: FunctionFingerprint model + Binary.fingerprints relationship
 
 ### Architecture Abstraction Layer (Refactoring)
 
@@ -114,8 +114,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `ProcessSnapshot.source_type` and `source_path`: Track data source (maps/coredump/gdb_dump)
 
 **Files**:
-- `blackadder/binutils/coredump.py` (258 lines)
-- `blackadder/db/process.py`: +load_core_dump() method
+- `baldrick/binutils/coredump.py` (258 lines)
+- `baldrick/db/process.py`: +load_core_dump() method
 
 **Design**: Uses readelf to extract PT_LOAD segments from core dump, converts to /proc/maps-like format, reuses existing address resolution logic.
 
@@ -131,8 +131,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - CLI command: `analyse-memory`
 
 **Files**:
-- `blackadder/memory_analyzer.py` (227 lines)
-- `blackadder/models.py`: +MemoryRegionType enum, +ProcessRegisterState, +MemoryRegionAnalysis
+- `baldrick/memory_analyzer.py` (227 lines)
+- `baldrick/models.py`: +MemoryRegionType enum, +ProcessRegisterState, +MemoryRegionAnalysis
 
 **Design**: Classify heap/stack/vdso/library/JIT regions via heuristics, detect executable heap/RWX/oversized allocations, assess corruption risk.
 
@@ -148,9 +148,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `SymbolCache` model: persistent symbol resolution cache across sessions
 
 **Files**:
-- `blackadder/models.py`: +Thread, +SymbolCache (also updated ProcessRegisterState to use `registers_json: str`)
-- `blackadder/db/process.py`: +load_live_threads(), +load_gdb_dump()
-- `blackadder/cli/main.py`: +`--gdb-dump` option on `load-process`
+- `baldrick/models.py`: +Thread, +SymbolCache (also updated ProcessRegisterState to use `registers_json: str`)
+- `baldrick/db/process.py`: +load_live_threads(), +load_gdb_dump()
+- `baldrick/cli/main.py`: +`--gdb-dump` option on `load-process`
 
 ### Phase A3 - GDB Dump Parser (Completed)
 
@@ -163,7 +163,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `parse_gdb_registers_only(text) -> dict[str, int]`: single-thread register parse
 
 **Files**:
-- `blackadder/binutils/gdb_dump.py` (290 lines): GdbFrame, GdbThread, GdbDump, LockStateEntry dataclasses + 3 parse functions
+- `baldrick/binutils/gdb_dump.py` (290 lines): GdbFrame, GdbThread, GdbDump, LockStateEntry dataclasses + 3 parse functions
 - `tests/test_gdb_dump.py`: 49 tests covering all parse functions and edge cases
 
 **Key design**:
@@ -184,10 +184,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - CLI command: `analyse-deadlock --snapshot-id N [--lock-state FILE] [--json]`
 
 **Files**:
-- `blackadder/deadlock_analyzer.py` (555 lines): DeadlockThread, DeadlockCycle, DeadlockReport + DeadlockAnalyzer
-- `blackadder/db/process.py`: +get_deadlock_report()
-- `blackadder/cli/main.py`: +analyse-deadlock command
-- `blackadder/queries.py`: +deadlock-threads built-in query
+- `baldrick/deadlock_analyzer.py` (555 lines): DeadlockThread, DeadlockCycle, DeadlockReport + DeadlockAnalyzer
+- `baldrick/db/process.py`: +get_deadlock_report()
+- `baldrick/cli/main.py`: +analyse-deadlock command
+- `baldrick/queries.py`: +deadlock-threads built-in query
 - `tests/test_deadlock_analyzer.py` (32 tests)
 - `tests/gdb-scripts/_gdb/find_deadlock.py`: GDB command extension (rewritten)
 
@@ -251,7 +251,7 @@ content_hash = hashlib.sha256(normalized).hexdigest()
 
 ### 6. Unified Database (Single SQLite file)
 ```
-blackadder.db    # Binary metadata + process snapshots in one file
+baldrick.db    # Binary metadata + process snapshots in one file
 ```
 **Why**: `ProcessBinary` links process snapshots to binaries via FK — cross-file SQLite FKs are not supported. A single DB also simplifies CLI usage (one `--db` global option).
 
@@ -279,7 +279,7 @@ python3 -m pytest tests/ -v
 python3 -m pytest tests/test_deadlock_analyzer.py -v
 
 # Run with coverage
-python3 -m pytest tests/ --cov=blackadder --cov-report=html
+python3 -m pytest tests/ --cov=baldrick --cov-report=html
 
 # Run CLI commands  (--db is a global option, placed before subcommand)
 baldrick --db session.db load-process --pid 12345
@@ -290,18 +290,18 @@ baldrick --db session.db query deadlock-threads --param id=1
 baldrick --db session.db schema
 
 # Type checking
-mypy blackadder/ --ignore-missing-imports
+mypy baldrick/ --ignore-missing-imports
 
 # Code formatting
-black blackadder/ tests/
-ruff check blackadder/ tests/
+black baldrick/ tests/
+ruff check baldrick/ tests/
 ```
 
 ## Database Schema
 
 Full ERD: `docs/schema.dot` (render: `dot -Tsvg docs/schema.dot -o docs/schema.svg`)
 
-### blackadder.db (Unified — Binary Metadata + Process Analysis)
+### baldrick.db (Unified — Binary Metadata + Process Analysis)
 
 ```sql
 -- Binary metadata (static, cached by MD5)
@@ -388,7 +388,7 @@ Auto-detects and parses:
 2. **Kernel format**: `[<ffffffff81010001>] function_name+0x42/0x100`
 3. **Raw hex**: `0x400a1c` (one per line)
 
-See `blackadder/binutils/resolver.py:parse_backtrace_auto()` for regex patterns.
+See `baldrick/binutils/resolver.py:parse_backtrace_auto()` for regex patterns.
 
 ## Performance Characteristics
 

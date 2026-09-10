@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phase 3 focuses on **local GDB integration** and **advanced memory/register analysis**. These features work entirely offline (no remote service) and enhance Blackadder's debugging capabilities for interactive use.
+Phase 3 focuses on **local GDB integration** and **advanced memory/register analysis**. These features work entirely offline (no remote service) and enhance Baldrick's debugging capabilities for interactive use.
 
 ## Phase 3 Scope
 
@@ -16,7 +16,7 @@ Phase 3 is divided into two concurrent tracks:
 ## Track A: GDB Python Extension
 
 ### Goal
-Enable Blackadder to act as a backend for GDB, providing enhanced symbol resolution, memory analysis, and backtrace decoding within the familiar GDB environment.
+Enable Baldrick to act as a backend for GDB, providing enhanced symbol resolution, memory analysis, and backtrace decoding within the familiar GDB environment.
 
 ### 3.1: GDB Interface Design (Week 1)
 
@@ -24,15 +24,15 @@ Enable Blackadder to act as a backend for GDB, providing enhanced symbol resolut
 
 #### 3.1.1 GDB Python API Bridge
 ```python
-# blackadder/gdb_bridge.py
+# baldrick/gdb_bridge.py
 
-class BlackadderGDBBridge:
-    """Interface between GDB and Blackadder analysis engine."""
+class BaldrickGDBBridge:
+    """Interface between GDB and Baldrick analysis engine."""
     
-    def __init__(self, blackadder_db_path: str):
+    def __init__(self, baldrick_db_path: str):
         self.db = ProcessDatabase(manager)
     
-    # GDB commands that invoke Blackadder
+    # GDB commands that invoke Baldrick
     async def gdb_decode_backtrace(self, frame_list: list[dict]) -> list[dict]:
         """Enhanced backtrace decoding for current inferior."""
         # Input: GDB frame info (address, function, file, line)
@@ -55,33 +55,33 @@ class BlackadderGDBBridge:
 
 #### 3.1.2 GDB Command Definitions
 ```python
-# blackadder/gdb_commands.py
+# baldrick/gdb_commands.py
 
 # Commands to register with GDB
-BLACKADDER_COMMANDS = {
-    "blackadder backtrace-analyze": {
-        "description": "Decode and analyze backtrace with Blackadder",
-        "usage": "blackadder backtrace-analyze",
+BALDRICK_COMMANDS = {
+    "baldrick backtrace-analyze": {
+        "description": "Decode and analyze backtrace with Baldrick",
+        "usage": "baldrick backtrace-analyze",
         "handler": "analyze_backtrace_command",
     },
-    "blackadder address-analyze": {
+    "baldrick address-analyze": {
         "description": "Analyze address at cursor or argument",
-        "usage": "blackadder address-analyze [address]",
+        "usage": "baldrick address-analyze [address]",
         "handler": "analyze_address_command",
     },
-    "blackadder memory-regions": {
+    "baldrick memory-regions": {
         "description": "List memory regions with type classification",
-        "usage": "blackadder memory-regions [address | start end]",
+        "usage": "baldrick memory-regions [address | start end]",
         "handler": "memory_regions_command",
     },
-    "blackadder symbol-find": {
+    "baldrick symbol-find": {
         "description": "Find symbols by pattern",
-        "usage": "blackadder symbol-find <pattern>",
+        "usage": "baldrick symbol-find <pattern>",
         "handler": "symbol_find_command",
     },
-    "blackadder register-interpret": {
+    "baldrick register-interpret": {
         "description": "Interpret registers (pointers, strings, etc.)",
-        "usage": "blackadder register-interpret [register_name]",
+        "usage": "baldrick register-interpret [register_name]",
         "handler": "register_interpret_command",
     },
 }
@@ -89,7 +89,7 @@ BLACKADDER_COMMANDS = {
 
 #### 3.1.3 GDB Pretty-Printers
 ```python
-# blackadder/gdb_printers.py
+# baldrick/gdb_printers.py
 
 class BacktraceFramePrinter:
     """Pretty-print enhanced backtrace frames."""
@@ -115,11 +115,11 @@ class MemoryRegionPrinter:
 
 #### 3.2.1 Command Handlers
 ```python
-# blackadder/gdb_integration.py
+# baldrick/gdb_integration.py
 
 async def analyze_backtrace_command(gdb_context):
     """
-    GDB Command: blackadder backtrace-analyze
+    GDB Command: baldrick backtrace-analyze
     
     Decodes current backtrace with:
     - Symbol resolution
@@ -130,15 +130,15 @@ async def analyze_backtrace_command(gdb_context):
     current_thread = gdb_context.selected_thread()
     frames = await extract_frames_from_inferior(current_thread)
     
-    # Run through Blackadder analysis
-    analysis = await blackadder_bridge.analyze_backtrace(frames)
+    # Run through Baldrick analysis
+    analysis = await baldrick_bridge.analyze_backtrace(frames)
     
     # Format and display
     display_backtrace_analysis(analysis)
 
 async def analyze_address_command(gdb_context, address: int):
     """
-    GDB Command: blackadder address-analyze <addr>
+    GDB Command: baldrick address-analyze <addr>
     
     Shows:
     - Symbol name and offset
@@ -147,12 +147,12 @@ async def analyze_address_command(gdb_context, address: int):
     - Anomalies (RWX, writable code, etc.)
     - Register if address in any register
     """
-    analysis = await blackadder_bridge.analyze_address(address)
+    analysis = await baldrick_bridge.analyze_address(address)
     display_address_analysis(analysis)
 
 async def memory_regions_command(gdb_context, start: int, end: int):
     """
-    GDB Command: blackadder memory-regions [start end]
+    GDB Command: baldrick memory-regions [start end]
     
     Shows all memory regions in range with:
     - Address range
@@ -161,13 +161,13 @@ async def memory_regions_command(gdb_context, start: int, end: int):
     - Anomalies
     - Path/binary name
     """
-    regions = await blackadder_bridge.get_memory_regions(start, end)
+    regions = await baldrick_bridge.get_memory_regions(start, end)
     display_memory_table(regions)
 ```
 
 #### 3.2.2 Data Extraction from Inferior
 ```python
-# blackadder/gdb_inferior.py
+# baldrick/gdb_inferior.py
 
 async def extract_frames_from_inferior(thread):
     """Extract frame info from GDB inferior."""
@@ -217,7 +217,7 @@ async def test_gdb_backtrace_analyze():
     # Start GDB with test program
     # Set breakpoint
     # Run to breakpoint
-    # Execute: blackadder backtrace-analyze
+    # Execute: baldrick backtrace-analyze
     # Verify output contains: address, symbol, file, memory type
     pass
 
@@ -241,9 +241,9 @@ async def test_gdb_memory_regions():
 **Deliverable**: GDB plugin installation script and user guide
 
 ```bash
-# blackadder/gdb_setup.sh
+# baldrick/gdb_setup.sh
 
-# Install Blackadder GDB plugin
+# Install Baldrick GDB plugin
 # - Copy gdb_integration.py to ~/.gdbinit.d/
 # - Register commands with GDB
 # - Load automatically on GDB startup
@@ -268,7 +268,7 @@ Provide rich, contextual debugging information: register interpretation, heap an
 
 #### 3.5.1 Register State Analysis
 ```python
-# blackadder/register_analyzer.py
+# baldrick/register_analyzer.py
 
 class RegisterInterpreter:
     """Interpret CPU register values in context."""
@@ -352,7 +352,7 @@ class RegisterInterpreter:
 
 #### 3.5.2 Data Type Inference
 ```python
-# blackadder/type_inference.py
+# baldrick/type_inference.py
 
 class TypeInferencer:
     """Infer types from memory patterns and registers."""
@@ -386,7 +386,7 @@ class TypeInferencer:
 
 #### 3.6.1 Heap Inspector
 ```python
-# blackadder/heap_analyzer.py
+# baldrick/heap_analyzer.py
 
 class HeapAnalyzer:
     """Analyze heap structure and detect corruption."""
@@ -443,7 +443,7 @@ class HeapAnalyzer:
 
 #### 3.7.1 Stack Frame Validator
 ```python
-# blackadder/stack_validator.py
+# baldrick/stack_validator.py
 
 class StackUnwindValidator:
     """Validate and repair corrupted stack frames."""

@@ -2,7 +2,7 @@
 
 import typer
 
-from blackadder.cli.main import app
+from baldrick.cli.main import app
 
 
 def test_top_level_command_set_is_stable():

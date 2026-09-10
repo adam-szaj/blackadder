@@ -1,14 +1,14 @@
-# Blackadder Project Roadmap
+# Baldrick Project Roadmap
 
 ## Vision
 
-**Blackadder** is a comprehensive Linux debugging engine designed to be the ultimate companion for debugging complex applications, embedded systems, and production issues. It combines local analysis, remote debugging, and advanced memory introspection into a unified platform.
+**Baldrick** is a comprehensive Linux debugging engine designed to be the ultimate companion for debugging complex applications, embedded systems, and production issues. It combines local analysis, remote debugging, and advanced memory introspection into a unified platform.
 
 ## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Blackadder Debugging Platform                │
+│                    Baldrick Debugging Platform                │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  Phase 4: Remote Service & Live GDB Support (Weeks 1-6)        │
@@ -38,7 +38,7 @@
 
 Data Layer
 ┌─────────────────────────────────────────────────────────────────┐
-│ blackadder-rootfs.db (static)  │  blackadder-process.db (dynamic)│
+│ baldrick-rootfs.db (static)  │  baldrick-process.db (dynamic)│
 │ - Binary metadata              │  - Process snapshots             │
 │ - Sections & symbols          │  - Memory mappings               │
 │ - Fingerprints                │  - Register state                │
@@ -417,7 +417,7 @@ Legend:
 ```bash
 baldrick --help                          # Local CLI
 uv run pytest tests/                     # Run tests
-uv run mypy blackadder                   # Type check
+uv run mypy baldrick                   # Type check
 ```
 
 ### Single Machine
@@ -430,8 +430,8 @@ baldrick decode-backtrace --pid 1234 < trace.txt
 ### With GDB
 ```bash
 gdb ./myprogram
-(gdb) blackadder backtrace-analyze       # Phase 3
-(gdb) blackadder memory-regions          # Phase 3
+(gdb) baldrick backtrace-analyze       # Phase 3
+(gdb) baldrick memory-regions          # Phase 3
 ```
 
 ### Remote Service
@@ -527,7 +527,7 @@ gdb target remote localhost:2331          # Connect (Phase 4)
 
 ## Conclusion
 
-Blackadder is designed to be the **ultimate Linux debugging platform**, progressing from a powerful local analysis tool (Phase 2) to a comprehensive debugging ecosystem with remote capabilities (Phase 4).
+Baldrick is designed to be the **ultimate Linux debugging platform**, progressing from a powerful local analysis tool (Phase 2) to a comprehensive debugging ecosystem with remote capabilities (Phase 4).
 
 The phased approach allows:
 - ✅ Early delivery of production-ready features (Phase 2)

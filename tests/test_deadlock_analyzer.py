@@ -9,7 +9,7 @@ Tests the three evidence tiers:
 Also tests edge cases: single blocked thread, no blocked threads, mixed evidence.
 """
 
-from blackadder.deadlock_analyzer import (
+from baldrick.deadlock_analyzer import (
     DeadlockAnalyzer,
     DeadlockReport,
 )

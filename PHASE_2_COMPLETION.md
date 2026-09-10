@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phase 2 of Blackadder development is now **COMPLETE**. This phase focused on building a production-ready debugging engine with advanced binary analysis, core dump support, and architecture abstraction.
+Phase 2 of Baldrick development is now **COMPLETE**. This phase focused on building a production-ready debugging engine with advanced binary analysis, core dump support, and architecture abstraction.
 
 ## Phase 2 Deliverables
 
@@ -21,11 +21,11 @@ Phase 2 of Blackadder development is now **COMPLETE**. This phase focused on bui
 - ✅ 78/99 tests passing (78% pass rate)
 
 **Files**:
-- blackadder/models.py (SQLModel ORM)
-- blackadder/db/ (AsyncDatabaseManager, ProcessDatabase, RootfsDatabase)
-- blackadder/binutils/ (parser, resolver)
-- blackadder/cli/main.py (Typer CLI)
-- blackadder/config.py (Pydantic Settings)
+- baldrick/models.py (SQLModel ORM)
+- baldrick/db/ (AsyncDatabaseManager, ProcessDatabase, RootfsDatabase)
+- baldrick/binutils/ (parser, resolver)
+- baldrick/cli/main.py (Typer CLI)
+- baldrick/config.py (Pydantic Settings)
 
 ### Phase 2.1: Binary Matching (Completed)
 **Goal**: Handle version mismatches via assembly fingerprinting
@@ -41,10 +41,10 @@ Phase 2 of Blackadder development is now **COMPLETE**. This phase focused on bui
 - ✅ 273-line test suite for matcher
 
 **Files**:
-- blackadder/binutils/hasher.py (217 lines)
-- blackadder/binutils/matcher.py (126 lines)
-- blackadder/db/rootfs.py (133 lines)
-- blackadder/models.py: FunctionFingerprint model
+- baldrick/binutils/hasher.py (217 lines)
+- baldrick/binutils/matcher.py (126 lines)
+- baldrick/db/rootfs.py (133 lines)
+- baldrick/models.py: FunctionFingerprint model
 - tests/test_hasher.py (286 lines)
 - tests/test_matcher.py (273 lines)
 - PHASE_2_1_STATUS.md (comprehensive guide)
@@ -62,10 +62,10 @@ Phase 2 of Blackadder development is now **COMPLETE**. This phase focused on bui
 - ✅ 350-line test suite for core dumps
 
 **Files**:
-- blackadder/binutils/coredump.py (258 lines)
-- blackadder/models.py: ProcessRegisterState model
-- blackadder/db/process.py: load_core_dump() method
-- blackadder/cli/main.py: load-core-dump command
+- baldrick/binutils/coredump.py (258 lines)
+- baldrick/models.py: ProcessRegisterState model
+- baldrick/db/process.py: load_core_dump() method
+- baldrick/cli/main.py: load-core-dump command
 - tests/test_coredump.py (350 lines)
 - PHASE_2_2_STATUS.md (comprehensive guide)
 
@@ -82,10 +82,10 @@ Phase 2 of Blackadder development is now **COMPLETE**. This phase focused on bui
 - ✅ 334-line test suite with 20 tests
 
 **Files**:
-- blackadder/memory_analyzer.py (227 lines)
-- blackadder/models.py: MemoryRegionType, MemoryRegionAnalysis
-- blackadder/db/process.py: analyze_memory_layout() method
-- blackadder/cli/main.py: analyze-memory command
+- baldrick/memory_analyzer.py (227 lines)
+- baldrick/models.py: MemoryRegionType, MemoryRegionAnalysis
+- baldrick/db/process.py: analyze_memory_layout() method
+- baldrick/cli/main.py: analyze-memory command
 - tests/test_memory_analyzer.py (334 lines, 20 tests)
 - PHASE_2_3_STATUS.md (comprehensive guide)
 
@@ -106,12 +106,12 @@ Phase 2 of Blackadder development is now **COMPLETE**. This phase focused on bui
 - ✅ 100% backward compatible (no breaking changes)
 
 **Files**:
-- blackadder/arch/__init__.py (28 lines)
-- blackadder/arch/base.py (154 lines)
-- blackadder/arch/x86.py (182 lines)
-- blackadder/arch/arm.py (245 lines)
-- blackadder/arch/riscv.py (282 lines)
-- blackadder/arch/detector.py (145 lines)
+- baldrick/arch/__init__.py (28 lines)
+- baldrick/arch/base.py (154 lines)
+- baldrick/arch/x86.py (182 lines)
+- baldrick/arch/arm.py (245 lines)
+- baldrick/arch/riscv.py (282 lines)
+- baldrick/arch/detector.py (145 lines)
 - ARCHITECTURE_EXTRACTION.md (comprehensive guide)
 - ARCH_EXTRACTION_SUMMARY.md (quick overview)
 - ARCH_EXTRACTION_STATS.md (detailed metrics)

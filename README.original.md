@@ -1,4 +1,4 @@
-# Blackadder
+# Baldrick
 
 High-level Linux binutils wrapper for debugging. Provides backtrace decoding, symbol resolution, and memory analysis for debugging core dumps, process traces, and production issues.
 
@@ -157,7 +157,7 @@ $ baldrick --db debug.db analyse-memory --pid 1
 
 ### Database Structure
 
-A single `blackadder.db` (or whatever `--db` points to) holds all data:
+A single `baldrick.db` (or whatever `--db` points to) holds all data:
 
 **Binary metadata** (static, cached by MD5 — reusable across processes):
 - `binary`: ELF files with MD5 checksums
@@ -199,7 +199,7 @@ baldrick --db session.db decode-backtrace --pid 12345
 ```
 baldrick (CLI entry point)
   ↓
-blackadder package
+baldrick package
   ├─ config.py (Pydantic Settings)
   ├─ models.py (SQLModel ORM)
   ├─ cli/main.py (Typer CLI)
@@ -212,7 +212,7 @@ blackadder package
       └─ resolver.py (address → symbol)
 
 Database
-  └─ blackadder.db (unified: binary metadata + process snapshots)
+  └─ baldrick.db (unified: binary metadata + process snapshots)
 ```
 
 ### Modern Stack
@@ -232,7 +232,7 @@ Database
 uv run pytest
 
 # With coverage
-uv run pytest --cov=blackadder
+uv run pytest --cov=baldrick
 
 # Specific test
 uv run pytest tests/test_parser.py -v
@@ -240,9 +240,9 @@ uv run pytest tests/test_parser.py -v
 
 ### Code quality
 ```bash
-uv run black blackadder tests  # Code formatting
-uv run ruff check blackadder tests  # Linting
-uv run mypy blackadder  # Type checking
+uv run black baldrick tests  # Code formatting
+uv run ruff check baldrick tests  # Linting
+uv run mypy baldrick  # Type checking
 ```
 
 ## Performance Characteristics
@@ -255,7 +255,7 @@ uv run mypy blackadder  # Type checking
 
 **With semaphore limiting** (default: 32 concurrent processes):
 - Prevent resource exhaustion on systems with many cores
-- Configurable via `BlackadderConfig.max_subprocess_workers`
+- Configurable via `BaldrickConfig.max_subprocess_workers`
 
 **With symbol caching**:
 - Typical cache hit rate >50% for repeated frames
@@ -266,7 +266,7 @@ uv run mypy blackadder  # Type checking
 Create `.env` file in project root:
 
 ```bash
-DB=sqlite+aiosqlite:///blackadder.db
+DB=sqlite+aiosqlite:///baldrick.db
 MAX_SUBPROCESS_WORKERS=32
 MAX_SYMBOL_CACHE_SIZE=100000
 ```
@@ -302,7 +302,7 @@ baldrick --db /tmp/analysis.db load-process --pid 12345
 
 ### Planned (Phase 3+)
 - Live GDB session support
-- Blackadder remote service (for embedded GDB)
+- Baldrick remote service (for embedded GDB)
 - Stripped binary symbol recovery
 - Heap structure analysis (free list corruption detection)
 - Stack buffer overflow detection

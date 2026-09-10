@@ -32,7 +32,7 @@ except Exception as e:
 ```
 
 ### 2. Type Annotations Modernization
-**Files: All Python files in blackadder/**
+**Files: All Python files in baldrick/**
 
 - Replaced `Optional[X]` with `X | None` (PEP 604 union syntax)
 - Removed all unused Optional imports
@@ -46,7 +46,7 @@ except Exception as e:
 ### 3. Critical Fixes
 - **Address Overflow**: Added `to_signed_64bit()` for kernel-space addresses (0xffff...)
 - **Program Header Parsing**: Fixed readelf regex to capture space-separated flags
-- **Import Error**: Added missing `init_parser` import to `blackadder/binutils/__init__.py`
+- **Import Error**: Added missing `init_parser` import to `baldrick/binutils/__init__.py`
 - **Type Errors**: Fixed 15 mypy errors across 5 files
 - **Lazy Loading**: Addressed async relationship handling in database layer
 

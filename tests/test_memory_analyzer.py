@@ -6,15 +6,15 @@ Tests region classification, anomaly detection, and corruption detection.
 
 import pytest
 
-from blackadder.config import BlackadderConfig
-from blackadder.memory_analyzer import MemoryAnalyzer
-from blackadder.models import MemoryRegionType
+from baldrick.config import BaldrickConfig
+from baldrick.memory_analyzer import MemoryAnalyzer
+from baldrick.models import MemoryRegionType
 
 
 @pytest.fixture
 def analyzer():
     """MemoryAnalyzer instance for tests that call instance methods."""
-    return MemoryAnalyzer(BlackadderConfig())
+    return MemoryAnalyzer(BaldrickConfig())
 
 
 class TestClassifyRegion:

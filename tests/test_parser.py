@@ -8,14 +8,14 @@ import asyncio
 
 import pytest
 
-from blackadder.binutils.parser import BinToolsParser
-from blackadder.config import BlackadderConfig
+from baldrick.binutils.parser import BinToolsParser
+from baldrick.config import BaldrickConfig
 
 
 @pytest.fixture
 def parser_config():
     """Create test parser config."""
-    return BlackadderConfig(max_subprocess_workers=2)
+    return BaldrickConfig(max_subprocess_workers=2)
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 """
-Tests for blackadder/binutils/gdb_dump.py.
+Tests for baldrick/binutils/gdb_dump.py.
 
 Covers:
   - parse_gdb_dump()       — multi-thread backtrace + register parsing
@@ -8,7 +8,7 @@ Covers:
   - LockStateEntry         — dataclass correctness
 """
 
-from blackadder.binutils.gdb_dump import (
+from baldrick.binutils.gdb_dump import (
     parse_condition_state,
     parse_gdb_dump,
     parse_gdb_registers_only,
@@ -510,7 +510,7 @@ class TestDeadlockAnalyzerTier0:
         return parse_lock_state(text)
 
     def test_two_thread_cycle_certain(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         text = """\
 BALDRICK_LOCK_STATE_BEGIN
@@ -526,7 +526,7 @@ BALDRICK_LOCK_STATE_END
         assert report.cycles[0].evidence_level == "certain"
 
     def test_three_thread_cycle(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         text = """\
 BALDRICK_LOCK_STATE_BEGIN
@@ -542,7 +542,7 @@ BALDRICK_LOCK_STATE_END
         assert set(report.cycles[0].tids) == {101, 102, 103}
 
     def test_suspected_thread_not_in_cycle(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         # tid 103 waits on m1 owned by 101, but 103 doesn't own anything 101 wants
         text = """\
@@ -559,7 +559,7 @@ BALDRICK_LOCK_STATE_END
         assert any(dt.tid == 103 for dt in report.suspected_threads)
 
     def test_unknown_owner_falls_back_to_probable(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         # No owner_tid known — can't confirm cycle
         text = """\
@@ -575,7 +575,7 @@ BALDRICK_LOCK_STATE_END
         assert report.evidence_level != "certain"
 
     def test_lock_symbol_in_description(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         text = """\
 BALDRICK_LOCK_STATE_BEGIN
@@ -589,7 +589,7 @@ BALDRICK_LOCK_STATE_END
         assert "mylock" in desc or "otherlock" in desc
 
     def test_empty_lock_state_falls_through_to_tier1(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         # Empty lock_state → falls back to normal tier 1/2/3 analysis
         threads = [
@@ -617,14 +617,14 @@ BALDRICK_LOCK_STATE_END
         assert report.evidence_level != "none"
 
     def test_empty_lock_state_list_returns_none_report(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         # lock_state=[] → falls through to tier 1/2/3 (not Tier 0)
         report = DeadlockAnalyzer([], {}, lock_state=[]).analyze()
         assert report.evidence_level == "none"
 
     def test_thread_without_name_in_description(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         # name is empty string → treated as None
         text = """\
@@ -640,7 +640,7 @@ BALDRICK_LOCK_STATE_END
         assert "TID 201" in report.cycles[0].description
 
     def test_chain_without_cycle_all_suspected(self):
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         # 301→302→303 (linear chain, no cycle back to 301)
         text = """\
@@ -660,7 +660,7 @@ BALDRICK_LOCK_STATE_END
         import json
         from dataclasses import asdict
 
-        from blackadder.deadlock_analyzer import DeadlockAnalyzer
+        from baldrick.deadlock_analyzer import DeadlockAnalyzer
 
         text = """\
 BALDRICK_LOCK_STATE_BEGIN

@@ -4,8 +4,8 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from blackadder.dwarf_query import get_members
-from blackadder.models import DwarfMember, dwarf_identity_key
+from baldrick.dwarf_query import get_members
+from baldrick.models import DwarfMember, dwarf_identity_key
 
 
 class _Result:

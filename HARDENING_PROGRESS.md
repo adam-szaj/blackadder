@@ -12,7 +12,7 @@
 ## Phase 1: Error Handling Foundation ✅ (In Progress)
 
 ### Completed
-- ✅ `blackadder/exceptions.py` (30 custom exception classes)
+- ✅ `baldrick/exceptions.py` (30 custom exception classes)
   - DatabaseError hierarchy
   - FileError hierarchy
   - ELFError hierarchy
@@ -23,13 +23,13 @@
   - ResourceLimitError hierarchy
   - ParseError hierarchy
 
-- ✅ `blackadder/logging_config.py` (Complete logging setup)
+- ✅ `baldrick/logging_config.py` (Complete logging setup)
   - setup_logging() with level control
   - File and console handlers
   - Detailed and simple formatters
   - Module-specific loggers
 
-- ✅ `blackadder/config.py` (Resource limits added)
+- ✅ `baldrick/config.py` (Resource limits added)
   - max_memory_regions: 10,000
   - max_region_size: 1GB
   - max_core_dump_size: 1GB
@@ -38,34 +38,34 @@
   - subprocess_timeout_seconds: 10
   - log_file configuration
 
-- ✅ `blackadder/memory_analyzer.py` (Started validation)
+- ✅ `baldrick/memory_analyzer.py` (Started validation)
   - Input validation in classify_region()
   - Address range checks
   - Permission string validation
   - Type checking
   - Logging at WARNING level for violations
 
-- ✅ `blackadder/binutils/coredump.py` (Started validation)
+- ✅ `baldrick/binutils/coredump.py` (Started validation)
   - Input validation in parse_core_dump(): file existence, readability, size limits
   - ELF header validation in parse_elf_headers()
   - Program header validation in parse_program_headers()
   - Memory segment extraction validation in extract_memory_segments()
   - Register state extraction error handling in extract_register_state()
 
-- ✅ `blackadder/binutils/hasher.py` (Started validation)
+- ✅ `baldrick/binutils/hasher.py` (Started validation)
   - Input validation in compute_fingerprints(): file existence, readability, size limits
   - Function info extraction error handling in _extract_function_info()
   - Disassembly generation error handling in _get_disassembly()
   - Function assembly extraction validation in _extract_function_asm()
   - Normalization validation in normalize_function_body()
 
-- ✅ `blackadder/binutils/matcher.py` (Started validation)
+- ✅ `baldrick/binutils/matcher.py` (Started validation)
   - Input validation in find_matches(): type checking, threshold validation (0.0-1.0)
   - Database query error handling in _load_fingerprints()
   - Match scoring validation in score_match()
   - Logging at DEBUG and WARNING levels for anomalies
 
-- ✅ `blackadder/db/process.py` (Partial hardening)
+- ✅ `baldrick/db/process.py` (Partial hardening)
   - Input validation in load_maps(): pid, maps_text validation, region limit checking
   - Input validation in address_to_binary(): pid and addr validation
   - Input validation in decode_backtrace(): addresses list validation, frame limit checking
@@ -89,34 +89,34 @@
 - Handle graceful degradation
 
 ### Areas
-- [ ] blackadder/binutils/coredump.py
+- [ ] baldrick/binutils/coredump.py
   - Validate file exists and readable
   - Check core dump size < limit
   - Handle truncated core dumps
   - Validate ELF headers
 
-- [ ] blackadder/binutils/hasher.py
+- [ ] baldrick/binutils/hasher.py
   - Validate binary exists
   - Check file size
   - Handle parsing failures
 
-- [ ] blackadder/binutils/matcher.py
+- [ ] baldrick/binutils/matcher.py
   - Validate fingerprint data
   - Handle empty fingerprints
   - Validate threshold (0.0-1.0)
 
-- [ ] blackadder/db/process.py
+- [ ] baldrick/db/process.py
   - Validate process ID exists
   - Validate address in range
   - Check region count < limit
   - Implement query timeouts
 
-- [ ] blackadder/db/rootfs.py
+- [ ] baldrick/db/rootfs.py
   - Validate binary paths
   - Check database constraints
   - Handle cache eviction edge cases
 
-- [ ] blackadder/cli/main.py
+- [ ] baldrick/cli/main.py
   - Validate CLI arguments
   - Check file paths before processing
   - Show clear error messages

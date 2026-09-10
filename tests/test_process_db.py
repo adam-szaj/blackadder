@@ -10,7 +10,7 @@ Tests core MVP features:
 
 import pytest
 
-from blackadder.db import ProcessDatabase
+from baldrick.db import ProcessDatabase
 
 
 @pytest.mark.asyncio

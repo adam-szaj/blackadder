@@ -5,8 +5,8 @@ Tests stack validator across common corruption patterns.
 
 import pytest
 
-from blackadder.arch import X86_64Architecture
-from blackadder.stack_validator import (
+from baldrick.arch import X86_64Architecture
+from baldrick.stack_validator import (
     FrameCorruptionType,
     StackFrame,
     StackValidator,

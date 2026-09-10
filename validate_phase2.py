@@ -6,8 +6,8 @@ Tests core logic of hasher and matcher modules without pytest.
 """
 
 import sys
-from blackadder.binutils.hasher import FunctionHasher
-from blackadder.binutils.matcher import BinaryMatcher
+from baldrick.binutils.hasher import FunctionHasher
+from baldrick.binutils.matcher import BinaryMatcher
 
 
 def test_normalize_function_body():
@@ -126,7 +126,7 @@ def test_models_import():
     """Test that models can be imported and FunctionFingerprint exists."""
     print("Testing model imports...")
 
-    from blackadder.models import FunctionFingerprint, Binary
+    from baldrick.models import FunctionFingerprint, Binary
 
     # Check FunctionFingerprint has expected fields
     fp_fields = {f.name for f in FunctionFingerprint.__fields__.values()}
@@ -149,8 +149,8 @@ def test_db_classes_import():
     """Test that database classes can be imported."""
     print("Testing database class imports...")
 
-    from blackadder.db.rootfs import RootfsDatabase
-    from blackadder.db.process import ProcessDatabase
+    from baldrick.db.rootfs import RootfsDatabase
+    from baldrick.db.process import ProcessDatabase
 
     # Check methods exist
     assert hasattr(RootfsDatabase, "compute_and_cache_fingerprints"), "RootfsDatabase should have compute_and_cache_fingerprints"
@@ -167,7 +167,7 @@ def test_coredump_import():
     """Test that core dump parser can be imported."""
     print("Testing core dump parser imports...")
 
-    from blackadder.binutils.coredump import CoreDumpParser
+    from baldrick.binutils.coredump import CoreDumpParser
 
     # Check methods exist
     assert hasattr(CoreDumpParser, "parse_core_dump"), "CoreDumpParser should have parse_core_dump"
@@ -183,7 +183,7 @@ def test_processsnapshot_fields():
     """Test that ProcessSnapshot has Phase 2.2 fields."""
     print("Testing ProcessSnapshot Phase 2.2 fields...")
 
-    from blackadder.models import ProcessSnapshot
+    from baldrick.models import ProcessSnapshot
 
     # Check fields exist
     ps_fields = {f.name for f in ProcessSnapshot.__fields__.values()}
@@ -198,7 +198,7 @@ def test_process_database_core_dump():
     """Test that ProcessDatabase has load_core_dump method."""
     print("Testing ProcessDatabase Phase 2.2 methods...")
 
-    from blackadder.db.process import ProcessDatabase
+    from baldrick.db.process import ProcessDatabase
 
     assert hasattr(ProcessDatabase, "load_core_dump"), "ProcessDatabase should have load_core_dump"
     print("  ✓ ProcessDatabase has load_core_dump method")
@@ -210,7 +210,7 @@ def test_memory_analyzer_import():
     """Test that MemoryAnalyzer can be imported."""
     print("Testing memory analyzer imports...")
 
-    from blackadder.memory_analyzer import MemoryAnalyzer
+    from baldrick.memory_analyzer import MemoryAnalyzer
 
     # Check methods exist
     assert hasattr(MemoryAnalyzer, "classify_region"), "MemoryAnalyzer should have classify_region"
@@ -226,7 +226,7 @@ def test_register_state_model():
     """Test that ProcessRegisterState model exists."""
     print("Testing ProcessRegisterState model...")
 
-    from blackadder.models import ProcessRegisterState, MemoryRegionType, MemoryRegionAnalysis
+    from baldrick.models import ProcessRegisterState, MemoryRegionType, MemoryRegionAnalysis
 
     # Check fields exist
     rs_fields = {f.name for f in ProcessRegisterState.__fields__.values()}
@@ -251,7 +251,7 @@ def test_register_state_model():
 def main():
     """Run all validation tests."""
     print("=" * 70)
-    print("Blackadder Phase 2 Implementation Validation (2.1 + 2.2 + 2.3)")
+    print("Baldrick Phase 2 Implementation Validation (2.1 + 2.2 + 2.3)")
     print("=" * 70)
     print()
 

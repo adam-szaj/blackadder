@@ -7,12 +7,12 @@ import json
 
 import pytest
 
-from blackadder.cli.formatters import (
+from baldrick.cli.formatters import (
     JSONFormatter,
     OutputFormatter,
     PlainTextFormatter,
 )
-from blackadder.register_analyzer import RegisterInterpretation
+from baldrick.register_analyzer import RegisterInterpretation
 
 
 @pytest.fixture

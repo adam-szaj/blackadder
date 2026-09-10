@@ -6,8 +6,8 @@ Tests binary similarity scoring and matching.
 
 import pytest
 
-from blackadder.binutils.matcher import BinaryMatcher
-from blackadder.models import Binary, FunctionFingerprint
+from baldrick.binutils.matcher import BinaryMatcher
+from baldrick.models import Binary, FunctionFingerprint
 
 
 @pytest.mark.asyncio

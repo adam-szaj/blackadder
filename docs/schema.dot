@@ -1,8 +1,8 @@
-// Blackadder database schema — ERD in DOT format
+// Baldrick database schema — ERD in DOT format
 // Render: dot -Tsvg docs/schema.dot -o docs/schema.svg
 //         dot -Tpng docs/schema.dot -o docs/schema.png
 
-digraph blackadder_schema {
+digraph baldrick_schema {
     graph [
         rankdir = "LR"
         fontname = "Helvetica"

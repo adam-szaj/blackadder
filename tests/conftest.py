@@ -1,8 +1,8 @@
 """
-Pytest configuration and fixtures for blackadder tests.
+Pytest configuration and fixtures for baldrick tests.
 
 Provides async fixtures, test databases, sample data, and utilities
-for testing the complete blackadder stack.
+for testing the complete baldrick stack.
 """
 
 import asyncio
@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from blackadder.config import BlackadderConfig
-from blackadder.db import AsyncDatabaseManager, ProcessDatabase
+from baldrick.config import BaldrickConfig
+from baldrick.db import AsyncDatabaseManager, ProcessDatabase
 from tests.fixtures.phase3_data import (
     MOCK_MEMORY_MAPPINGS,
     MOCK_PROCESSES,
@@ -40,9 +40,9 @@ def event_loop():
 
 
 @pytest.fixture
-def test_config() -> BlackadderConfig:
+def test_config() -> BaldrickConfig:
     """Get test configuration with sensible defaults."""
-    return BlackadderConfig(
+    return BaldrickConfig(
         db="sqlite+aiosqlite:///:memory:",
         max_subprocess_workers=4,  # Limit for testing
         max_symbol_cache_size=1000,
@@ -50,7 +50,7 @@ def test_config() -> BlackadderConfig:
 
 
 @pytest.fixture
-def config(test_config) -> BlackadderConfig:
+def config(test_config) -> BaldrickConfig:
     """Alias for test_config for convenience."""
     return test_config
 
@@ -101,9 +101,9 @@ async def temp_databases(test_config) -> tuple[AsyncDatabaseManager, ProcessData
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 
-        database_url = f"sqlite+aiosqlite:///{tmpdir_path / 'blackadder.db'}"
+        database_url = f"sqlite+aiosqlite:///{tmpdir_path / 'baldrick.db'}"
 
-        config = BlackadderConfig(
+        config = BaldrickConfig(
             db=database_url,
             max_subprocess_workers=4,
         )
@@ -129,9 +129,9 @@ def sample_maps_content() -> str:
     return """555555554000-555555575000 r-xp 00000000 08:01 12345678  /home/user/myapp
 555555775000-555555776000 r--p 00020000 08:01 12345678  /home/user/myapp
 555555776000-555555777000 rw-p 00021000 08:01 12345678  /home/user/myapp
-7ffff7c00000-7ffff7c28000 r-xp 00000000 08:01 87654321  /__blackadder_missing__/lib64/ld-linux-x86-64.so.2
-7ffff7e00000-7ffff7e1c000 r-xp 00000000 08:01 11111111  /__blackadder_missing__/lib/libc.so.6
-7ffff7e1c000-7ffff7e7e000 rw-p 0001c000 08:01 11111111  /__blackadder_missing__/lib/libc.so.6
+7ffff7c00000-7ffff7c28000 r-xp 00000000 08:01 87654321  /__baldrick_missing__/lib64/ld-linux-x86-64.so.2
+7ffff7e00000-7ffff7e1c000 r-xp 00000000 08:01 11111111  /__baldrick_missing__/lib/libc.so.6
+7ffff7e1c000-7ffff7e7e000 rw-p 0001c000 08:01 11111111  /__baldrick_missing__/lib/libc.so.6
 7ffff7fdd000-7ffff7ffe000 rw-p 00000000 00:00 0         [vvar]
 7ffff7ffe000-7ffff8000000 r-xp 00000000 00:00 0         [vdso]
 ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0 [vsyscall]

@@ -6,13 +6,13 @@ Tests RegisterAnalyzer with mock process state across multiple architectures
 
 import pytest
 
-from blackadder.arch import (
+from baldrick.arch import (
     ARM64Architecture,
     ARMArchitecture,
     X86_64Architecture,
 )
-from blackadder.models import MemoryMapping, ProcessSnapshot
-from blackadder.register_analyzer import RegisterAnalyzer, RegisterInterpretation
+from baldrick.models import MemoryMapping, ProcessSnapshot
+from baldrick.register_analyzer import RegisterAnalyzer, RegisterInterpretation
 from tests.fixtures.phase3_data import MOCK_MEMORY_MAPPINGS, MOCK_PROCESSES, MOCK_REGISTER_STATES
 
 

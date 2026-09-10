@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from blackadder.config import BlackadderConfig
-from blackadder.db.process import ProcessDatabase
+from baldrick.config import BaldrickConfig
+from baldrick.db.process import ProcessDatabase
 
 
 class _FailingManager:
@@ -18,7 +18,7 @@ class _FailingManager:
 
 @pytest.mark.asyncio
 async def test_memory_cache_hit_retains_source_location():
-    database = ProcessDatabase(SimpleNamespace(), BlackadderConfig())
+    database = ProcessDatabase(SimpleNamespace(), BaldrickConfig())
     key = ("/lib/libc.so.6", 0x123)
     database.symbol_cache[key] = ("malloc", "malloc.c", 42)
 
@@ -28,7 +28,7 @@ async def test_memory_cache_hit_retains_source_location():
 
 
 def test_cache_bound_is_enforced_when_entries_are_added():
-    config = BlackadderConfig(max_symbol_cache_size=2)
+    config = BaldrickConfig(max_symbol_cache_size=2)
     database = ProcessDatabase(SimpleNamespace(), config)
 
     database._cache_symbol(("a", 1), ("one", None, None))
@@ -40,7 +40,7 @@ def test_cache_bound_is_enforced_when_entries_are_added():
 
 @pytest.mark.asyncio
 async def test_persistent_cache_failure_is_observable():
-    database = ProcessDatabase(_FailingManager(), BlackadderConfig())
+    database = ProcessDatabase(_FailingManager(), BaldrickConfig())
 
     with pytest.raises(RuntimeError, match="cache database unavailable"):
         await database._persist_symbol_cache(1, 2, "symbol")

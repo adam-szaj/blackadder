@@ -5,16 +5,16 @@ Tests AnalysisIntegration with ProcessSnapshot data and analyzers.
 
 import pytest
 
-from blackadder.analysis_integration import AnalysisIntegration, ProcessMemoryReader
-from blackadder.config import BlackadderConfig
-from blackadder.db.base import AsyncDatabaseManager
-from blackadder.models import MemoryMapping, ProcessSnapshot
+from baldrick.analysis_integration import AnalysisIntegration, ProcessMemoryReader
+from baldrick.config import BaldrickConfig
+from baldrick.db.base import AsyncDatabaseManager
+from baldrick.models import MemoryMapping, ProcessSnapshot
 
 
 @pytest.fixture
 def config():
     """Create test config."""
-    return BlackadderConfig(max_subprocess_workers=4)
+    return BaldrickConfig(max_subprocess_workers=4)
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ async def manager():
     db_url = "sqlite+aiosqlite:///:memory:"
     mgr = AsyncDatabaseManager(db_url)
     async with mgr.engine.begin() as conn:
-        from blackadder.models import SQLModel
+        from baldrick.models import SQLModel
 
         await conn.run_sync(SQLModel.metadata.create_all)
     return mgr

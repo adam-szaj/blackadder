@@ -6,7 +6,7 @@ RISC-V support has been added to the architecture abstraction layer, completing 
 
 ## Files Created
 
-### `blackadder/arch/riscv.py` (282 lines)
+### `baldrick/arch/riscv.py` (282 lines)
 
 Implements both 32-bit and 64-bit RISC-V variants:
 
@@ -38,7 +38,7 @@ Implements both 32-bit and 64-bit RISC-V variants:
 
 ## Integration Points
 
-### Updated `blackadder/arch/detector.py`
+### Updated `baldrick/arch/detector.py`
 
 **Changes:**
 - Added `RV32Architecture` and `RV64Architecture` imports
@@ -63,12 +63,12 @@ Implements both 32-bit and 64-bit RISC-V variants:
 - Defaults to RV64I as primary variant
 - Can detect RV32I from ELF class field (future enhancement)
 
-### Updated `blackadder/arch/__init__.py`
+### Updated `baldrick/arch/__init__.py`
 
 **Changes:**
 - Added RISC-V imports:
   ```python
-  from blackadder.arch.riscv import RV32Architecture, RV64Architecture
+  from baldrick.arch.riscv import RV32Architecture, RV64Architecture
   ```
 - Updated module docstring to mention RISC-V
 - Added to `__all__`:
@@ -159,7 +159,7 @@ assert is_stack == False
 
 **Factory Functions:**
 ```python
-from blackadder.arch import get_architecture
+from baldrick.arch import get_architecture
 
 rv32 = get_architecture("rv32i")
 rv64 = get_architecture("rv64i")
@@ -175,7 +175,7 @@ assert isinstance(rv64_alt, RV64Architecture)
 ### Auto-Detect RISC-V Binary
 
 ```python
-from blackadder.arch import detect_architecture
+from baldrick.arch import detect_architecture
 
 # Auto-detect from ELF file
 arch = detect_architecture("/usr/bin/riscv64-unknown-elf-gcc")
@@ -185,13 +185,13 @@ print(arch.arch_variant)  # Output: "rv64i"
 ### Explicit RISC-V Usage
 
 ```python
-from blackadder.arch import get_architecture
+from baldrick.arch import get_architecture
 
 # Use RV64I for analysis
 rv64 = get_architecture("rv64i")
 
 # Or use by family
-from blackadder.arch import SUPPORTED_ARCHITECTURES
+from baldrick.arch import SUPPORTED_ARCHITECTURES
 rv64_class = SUPPORTED_ARCHITECTURES["riscv"][1]
 rv64 = rv64_class()
 ```
@@ -199,8 +199,8 @@ rv64 = rv64_class()
 ### With FunctionHasher
 
 ```python
-from blackadder.binutils.hasher import FunctionHasher
-from blackadder.arch import get_architecture
+from baldrick.binutils.hasher import FunctionHasher
+from baldrick.arch import get_architecture
 
 arch = get_architecture("rv64i")
 hasher = FunctionHasher(config, architecture=arch)
@@ -212,8 +212,8 @@ fingerprints = await hasher.compute_fingerprints("/lib/libc.so.6")
 ### With MemoryAnalyzer
 
 ```python
-from blackadder.memory_analyzer import MemoryAnalyzer
-from blackadder.arch import get_architecture
+from baldrick.memory_analyzer import MemoryAnalyzer
+from baldrick.arch import get_architecture
 
 arch = get_architecture("rv64i")
 analyzer = MemoryAnalyzer(config, architecture=arch)
@@ -339,7 +339,7 @@ To verify RISC-V support in your environment:
 ```bash
 # Test RISC-V architecture classes
 python3 -c "
-from blackadder.arch import RV32Architecture, RV64Architecture
+from baldrick.arch import RV32Architecture, RV64Architecture
 rv64 = RV64Architecture()
 print(f'RV64I: {len(rv64.registers)} registers')
 print(f'SP register: {rv64.sp_register}')
@@ -348,14 +348,14 @@ print(f'FP register: {rv64.bp_register}')
 
 # Test factory functions
 python3 -c "
-from blackadder.arch import get_architecture
+from baldrick.arch import get_architecture
 arch = get_architecture('rv64i')
 print(f'Factory created: {arch.__class__.__name__}')
 "
 
 # Test instruction normalization
 python3 -c "
-from blackadder.arch import RV64Architecture
+from baldrick.arch import RV64Architecture
 rv64 = RV64Architecture()
 instr = rv64.normalize_instruction('addi x10, x10, 4')
 print(f'Normalized: {instr}')

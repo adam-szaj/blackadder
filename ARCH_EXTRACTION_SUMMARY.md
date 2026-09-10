@@ -2,15 +2,15 @@
 
 ## What Was Extracted
 
-All architecture-dependent code has been extracted from blackadder into a modular abstraction layer (`blackadder/arch/`).
+All architecture-dependent code has been extracted from baldrick into a modular abstraction layer (`baldrick/arch/`).
 
 ### Files Created
 
-1. **blackadder/arch/__init__.py** (26 lines)
+1. **baldrick/arch/__init__.py** (26 lines)
    - Package initialization
    - Exports: Architecture, RegisterInfo, X86Architecture, X86_64Architecture, ARMArchitecture, ARM64Architecture, detect_architecture, SUPPORTED_ARCHITECTURES
 
-2. **blackadder/arch/base.py** (154 lines)
+2. **baldrick/arch/base.py** (154 lines)
    - Abstract base class `Architecture`
    - Dataclass `RegisterInfo` for register metadata
    - Defines interface for:
@@ -20,7 +20,7 @@ All architecture-dependent code has been extracted from blackadder into a modula
      - Stack detection: `classify_stack_region(register_state, start, end) -> (bool, float)`
      - Utility: `get_register_value()`, `display_registers()`
 
-3. **blackadder/arch/x86.py** (182 lines)
+3. **baldrick/arch/x86.py** (182 lines)
    - `X86Architecture` (32-bit)
      - 32-bit registers: eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, eflags
      - Stack detection via ESP/EBP
@@ -31,7 +31,7 @@ All architecture-dependent code has been extracted from blackadder into a modula
      - Stack detection via RSP/RBP
      - Register normalization: `%rax, %eax, %ax, %al -> %REG_A`, etc.
 
-4. **blackadder/arch/arm.py** (245 lines)
+4. **baldrick/arch/arm.py** (245 lines)
    - `ARMArchitecture` (32-bit)
      - Registers: r0-r15 with aliases (sp=r13, fp=r11, lr=r14, pc=r15)
      - Stack detection via R13 (sp) and R11 (fp)
@@ -41,7 +41,7 @@ All architecture-dependent code has been extracted from blackadder into a modula
      - Stack detection via SP and X29 (fp)
      - Register normalization: `x0-x7 -> %REG_ARG`, `x8-x18 -> %REG_TEMP`, `x19-x28 -> %REG_SAVED`, etc.
 
-5. **blackadder/arch/detector.py** (125 lines)
+5. **baldrick/arch/detector.py** (125 lines)
    - `detect_architecture(binary_path: str) -> Architecture`
      - Reads ELF header (e_machine field)
      - Maps e_machine values to Architecture classes
@@ -53,17 +53,17 @@ All architecture-dependent code has been extracted from blackadder into a modula
 
 ### Files Modified
 
-1. **blackadder/binutils/hasher.py**
-   - Added import: `from blackadder.arch.base import Architecture`
-   - Added import: `from blackadder.arch.detector import detect_architecture`
+1. **baldrick/binutils/hasher.py**
+   - Added import: `from baldrick.arch.base import Architecture`
+   - Added import: `from baldrick.arch.detector import detect_architecture`
    - Modified `__init__`: Added optional `architecture: Architecture | None` parameter
    - Modified `compute_fingerprints()`: Auto-detects architecture from binary if not provided
    - Modified `normalize_function_body()`: Accepts optional `architecture` parameter, uses `arch.normalize_instruction()` instead of hardcoded patterns
    - Added `_normalize_generic()`: Fallback when architecture unavailable
 
-2. **blackadder/memory_analyzer.py**
-   - Added import: `from blackadder.arch.base import Architecture`
-   - Added import: `from blackadder.arch.detector import get_architecture`
+2. **baldrick/memory_analyzer.py**
+   - Added import: `from baldrick.arch.base import Architecture`
+   - Added import: `from baldrick.arch.detector import get_architecture`
    - Modified `__init__`: Added optional `architecture: Architecture | None` parameter (defaults to x86_64)
    - Modified `classify_region()`: Now instance method (was static), uses `arch.classify_stack_region()` for register-aware stack detection
    - Modified `analyze_memory_region()`: Now instance method (was static), passes architecture to `classify_region()`
@@ -188,7 +188,7 @@ ARCHITECTURE_MAP[243] = RISCVArchitecture
 ## Files for Reference
 
 - **ARCHITECTURE_EXTRACTION.md** - Comprehensive documentation
-- **blackadder/arch/** - Implementation (5 files, 732 lines total)
+- **baldrick/arch/** - Implementation (5 files, 732 lines total)
 - **CLAUDE.md** - Updated project documentation
 
 ## Backward Compatibility

@@ -6,7 +6,7 @@ Phase 2.2 (Core Dump Parsing) has been **fully implemented** with all core compo
 
 ## What Was Built
 
-### 1. Core Dump Parser Module (blackadder/binutils/coredump.py)
+### 1. Core Dump Parser Module (baldrick/binutils/coredump.py)
 
 ✅ **CoreDumpParser** class - Parse ELF core dump files:
 - `parse_core_dump(core_path)`: Main entry point
@@ -37,7 +37,7 @@ Phase 2.2 (Core Dump Parsing) has been **fully implemented** with all core compo
 - Non-invasive: No direct binary parsing needed
 - Consistent: Reuses existing subprocess pooling
 
-### 2. Model Updates (blackadder/models.py)
+### 2. Model Updates (baldrick/models.py)
 
 ✅ **ProcessSnapshot** model enhanced:
 - `source_type`: str (default="maps")
@@ -48,7 +48,7 @@ Phase 2.2 (Core Dump Parsing) has been **fully implemented** with all core compo
   - Path to core dump file (or None for /proc/maps)
   - Enables traceability and re-analysis
 
-### 3. ProcessDatabase Enhancement (blackadder/db/process.py)
+### 3. ProcessDatabase Enhancement (baldrick/db/process.py)
 
 ✅ **ProcessDatabase.load_core_dump()** method (40 lines):
 - Async, non-blocking core dump loading
@@ -63,7 +63,7 @@ Phase 2.2 (Core Dump Parsing) has been **fully implemented** with all core compo
 - Symbol resolution unchanged (works with fuzzy matches from Phase 2.1)
 - Backtrace decoding identical for both sources
 
-### 4. CLI Integration (blackadder/cli/main.py)
+### 4. CLI Integration (baldrick/cli/main.py)
 
 ✅ **load-core-dump** command (70 lines):
 - New Typer async command for core dump loading
@@ -175,7 +175,7 @@ ulimit -c unlimited
 ./myapp  # crashes and produces core dump
 ```
 
-### Step 2: Load core dump into Blackadder
+### Step 2: Load core dump into Baldrick
 ```bash
 baldrick load-core-dump --core /tmp/core.dump
 ```
@@ -186,7 +186,7 @@ baldrick load-core-dump --core /tmp/core.dump
 gdb ./myapp /tmp/core.dump
 (gdb) bt
 
-# Decode with Blackadder
+# Decode with Baldrick
 cat backtrace.txt | baldrick decode-backtrace --pid <snapshot_id>
 ```
 

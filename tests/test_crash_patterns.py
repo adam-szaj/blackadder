@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-from blackadder.crash_patterns import CrashPatternEngine
+from baldrick.crash_patterns import CrashPatternEngine
 
 # ============================================================================
 # Helpers — lightweight stand-ins for ORM objects
@@ -112,7 +112,7 @@ class TestNoPatterns:
 
 class TestDeadlockPattern:
     def test_deadlock_forwarded(self):
-        from blackadder.deadlock_analyzer import DeadlockCycle
+        from baldrick.deadlock_analyzer import DeadlockCycle
 
         cycle = DeadlockCycle(tids=[1, 2], evidence_level="certain", description="A→B→A")
 

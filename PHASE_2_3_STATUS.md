@@ -303,4 +303,4 @@ All three Phase 2 components are now complete:
 - **Phase 2.2**: Core Dump Parsing
 - **Phase 2.3**: Enhanced Memory Analysis
 
-**Blackadder v0.3.0 ready with full Phase 2 capabilities.**
+**Baldrick v0.3.0 ready with full Phase 2 capabilities.**

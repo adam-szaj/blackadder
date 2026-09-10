@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phase 4 focuses on **remote debugging capabilities**: a FastAPI service backend and live GDB session support. This enables Blackadder to act as a remote debugging server for embedded systems, containers, and distributed debugging scenarios.
+Phase 4 focuses on **remote debugging capabilities**: a FastAPI service backend and live GDB session support. This enables Baldrick to act as a remote debugging server for embedded systems, containers, and distributed debugging scenarios.
 
 ## Phase 4 Scope
 
@@ -16,7 +16,7 @@ Phase 4 is divided into two tracks:
 ## Track A: Remote FastAPI Service
 
 ### Goal
-Create a production-ready FastAPI service that exposes Blackadder analysis capabilities over HTTP, enabling remote clients (embedded GDB, web tools, CI/CD) to access debugging features.
+Create a production-ready FastAPI service that exposes Baldrick analysis capabilities over HTTP, enabling remote clients (embedded GDB, web tools, CI/CD) to access debugging features.
 
 ### 4.1: FastAPI Service Architecture (Week 1)
 
@@ -24,13 +24,13 @@ Create a production-ready FastAPI service that exposes Blackadder analysis capab
 
 #### 4.1.1 API Specification
 ```python
-# blackadder/service/api.py
+# baldrick/service/api.py
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from pydantic import BaseModel
 
 app = FastAPI(
-    title="Blackadder Debugging Service",
+    title="Baldrick Debugging Service",
     description="Remote debugging engine for Linux binaries",
     version="1.0.0",
 )
@@ -168,7 +168,7 @@ async def health_check():
 
 #### 4.1.2 Service Configuration
 ```python
-# blackadder/service/config.py
+# baldrick/service/config.py
 
 class ServiceConfig(BaseSettings):
     """Configuration for remote service."""
@@ -180,8 +180,8 @@ class ServiceConfig(BaseSettings):
     workers: int = Field(default_factory=lambda: os.cpu_count() or 4)
     
     # Database settings (from Phase 2)
-    rootfs_db: str = "sqlite+aiosqlite:///blackadder-rootfs.db"
-    process_db: str = "sqlite+aiosqlite:///blackadder-process.db"
+    rootfs_db: str = "sqlite+aiosqlite:///baldrick-rootfs.db"
+    process_db: str = "sqlite+aiosqlite:///baldrick-process.db"
     
     # Security
     auth_token: str | None = None  # Optional auth token
@@ -200,7 +200,7 @@ class ServiceConfig(BaseSettings):
     
     class Config:
         env_file = ".env.service"
-        env_prefix = "BLACKADDER_"
+        env_prefix = "BALDRICK_"
 ```
 
 ### 4.2: Session Management (Week 1-2)
@@ -209,7 +209,7 @@ class ServiceConfig(BaseSettings):
 
 #### 4.2.1 Session Store
 ```python
-# blackadder/service/sessions.py
+# baldrick/service/sessions.py
 
 class SessionManager:
     """Manage analysis sessions and their lifecycle."""
@@ -384,7 +384,7 @@ async def analyze_memory(
 
 #### 4.4.1 Auth Middleware
 ```python
-# blackadder/service/auth.py
+# baldrick/service/auth.py
 
 class TokenAuth:
     """Token-based authentication."""
@@ -437,16 +437,16 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY blackadder/ ./blackadder/
+COPY baldrick/ ./baldrick/
 
 # Create data directory
-RUN mkdir -p /var/lib/blackadder
+RUN mkdir -p /var/lib/baldrick
 
 # Expose API port
 EXPOSE 8000
 
 # Run service
-CMD ["blackadder-service", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["baldrick-service", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 #### 4.5.2 Docker Compose
@@ -456,20 +456,20 @@ CMD ["blackadder-service", "--host", "0.0.0.0", "--port", "8000"]
 version: '3.8'
 
 services:
-  blackadder:
+  baldrick:
     build: .
     ports:
       - "8000:8000"
     volumes:
-      - blackadder-data:/var/lib/blackadder
+      - baldrick-data:/var/lib/baldrick
       - /proc:/proc:ro  # Read-only access to /proc
     environment:
-      - BLACKADDER_DEBUG=false
-      - BLACKADDER_WORKERS=4
+      - BALDRICK_DEBUG=false
+      - BALDRICK_WORKERS=4
     restart: unless-stopped
 
 volumes:
-  blackadder-data:
+  baldrick-data:
 ```
 
 ---
@@ -477,7 +477,7 @@ volumes:
 ## Track B: Live GDB Session Support
 
 ### Goal
-Enable Blackadder to attach to live GDB sessions, providing enhanced analysis of running processes in real-time.
+Enable Baldrick to attach to live GDB sessions, providing enhanced analysis of running processes in real-time.
 
 ### 4.6: GDB Attachment Protocol (Week 3)
 
@@ -485,7 +485,7 @@ Enable Blackadder to attach to live GDB sessions, providing enhanced analysis of
 
 #### 4.6.1 GDB Machine Interface (MI) Client
 ```python
-# blackadder/service/gdb_client.py
+# baldrick/service/gdb_client.py
 
 class GDBMIClient:
     """Connect to GDB via Machine Interface."""
@@ -550,7 +550,7 @@ class GDBMIClient:
 
 #### 4.7.1 Live Session Handler
 ```python
-# blackadder/service/live_gdb.py
+# baldrick/service/live_gdb.py
 
 class LiveGDBSession:
     """Manage live GDB session with real-time analysis."""
@@ -573,7 +573,7 @@ class LiveGDBSession:
         frames = await self.gdb.get_frames()
         registers = await self.gdb.get_registers()
         
-        # Run Blackadder analysis
+        # Run Baldrick analysis
         analysis = await self._analyze_current_state(frames, registers)
         
         # Notify subscribers
@@ -646,7 +646,7 @@ async def gdb_live_stream(websocket: WebSocket):
 
 #### 4.9.1 GDB Remote Protocol Server
 ```python
-# blackadder/service/gdb_remote.py
+# baldrick/service/gdb_remote.py
 
 class GDBRemoteServer:
     """
@@ -792,7 +792,7 @@ Week 6: Integration testing, documentation, stabilization
 ### Scenario 1: Local Service (Single Machine)
 ```bash
 # Start service on localhost
-blackadder-service --host 127.0.0.1 --port 8000
+baldrick-service --host 127.0.0.1 --port 8000
 
 # Connect from GDB
 gdb -ex "target remote localhost:2331"
@@ -810,11 +810,11 @@ gdb (target)> target remote dev-machine:2331
 ### Scenario 3: CI/CD Pipeline
 ```bash
 # Analyze core dumps automatically
-curl -X POST http://blackadder:8000/api/v1/sessions \
+curl -X POST http://baldrick:8000/api/v1/sessions \
   -H "Authorization: Bearer $TOKEN" \
   -d "pid=$PID"
 
-curl -X POST http://blackadder:8000/api/v1/sessions/$SESSION_ID/analyze \
+curl -X POST http://baldrick:8000/api/v1/sessions/$SESSION_ID/analyze \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -844,7 +844,7 @@ curl -X POST http://blackadder:8000/api/v1/sessions/$SESSION_ID/analyze \
 
 ## Transition Post Phase 4
 
-After Phase 4 completion, Blackadder will be:
+After Phase 4 completion, Baldrick will be:
 - ✅ Production-ready debugging engine (Phase 2)
 - ✅ Local GDB integration with advanced analysis (Phase 3)
 - ✅ Remote service with live debugging (Phase 4)

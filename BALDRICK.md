@@ -296,14 +296,14 @@ Usage:
 
 ## GDB Plugin
 
-The separately distributed `blackadder-gdb` package installs Blackadder as its
+The separately distributed `baldrick-gdb` package installs Baldrick as its
 dependency. Database-backed commands require a snapshot created with `bdr load`
 or `baldrick load-process`.
 
 ### Setup
 
 ```sh
-python -m pip install blackadder-gdb
+python -m pip install baldrick-gdb
 gdb -ex "source $(baldrick gdb-path)" ./myapp
 ```
 

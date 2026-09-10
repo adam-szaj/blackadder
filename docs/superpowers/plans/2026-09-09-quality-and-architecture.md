@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the nine review recommendations as small, verified, independently committed stages without changing Blackadder's public CLI unnecessarily.
+**Goal:** Implement the nine review recommendations as small, verified, independently committed stages without changing Baldrick's public CLI unnecessarily.
 
 **Architecture:** Preserve the Typer -> database/services -> SQLModel structure while making database boundaries atomic, binary-local data explicitly owned, addresses type-safe, and external processes supervised. Remove obsolete paths only after confirming they have no active callers.
 
@@ -25,7 +25,7 @@
 ## Task 1: Make rootfs indexing atomic and observable
 
 **Files:**
-- Modify: `blackadder/db/rootfs.py`
+- Modify: `baldrick/db/rootfs.py`
 - Test: `tests/test_rootfs_db.py`
 
 - [ ] Add a regression test applying a new-binary payload with symbols; verify it fails with the current uninitialized `symbols_already_ok` path.
@@ -41,7 +41,7 @@
 - Modify: `tests/conftest.py`
 - Modify: `tests/test_dwarf_parser.py`
 - Modify: core-dump tests using the old result/fixture contract
-- Modify: `blackadder/db/process.py`
+- Modify: `baldrick/db/process.py`
 - Test: process-map parser tests
 
 - [ ] Update database fixtures to use the unified `config.db` settings.
@@ -54,9 +54,9 @@
 ## Task 3: Correct DWARF ownership and canonical identity
 
 **Files:**
-- Modify: `blackadder/db/models.py`
-- Modify: `blackadder/db/rootfs.py`
-- Modify: `blackadder/db/dwarf_query.py`
+- Modify: `baldrick/db/models.py`
+- Modify: `baldrick/db/rootfs.py`
+- Modify: `baldrick/db/dwarf_query.py`
 - Modify: callers of member traversal
 - Test: `tests/test_dwarf_query.py`
 - Test: rootfs DWARF import tests
@@ -72,8 +72,8 @@
 ## Task 4: Centralize unsigned 64-bit address storage
 
 **Files:**
-- Modify: `blackadder/db/models.py`
-- Modify: raw SQL import/bind paths in `blackadder/db/rootfs.py` and `blackadder/db/process.py`
+- Modify: `baldrick/db/models.py`
+- Modify: raw SQL import/bind paths in `baldrick/db/rootfs.py` and `baldrick/db/process.py`
 - Test: address/model/process lookup tests
 
 - [ ] Add failing round-trip tests for `0`, `2**63 - 1`, `2**63`, and `2**64 - 1`.
@@ -86,9 +86,9 @@
 ## Task 5: Enforce foreign keys and version the schema
 
 **Files:**
-- Create: `blackadder/db/migrations.py`
-- Modify: `blackadder/db/manager.py`
-- Modify: `blackadder/db/models.py`
+- Create: `baldrick/db/migrations.py`
+- Modify: `baldrick/db/manager.py`
+- Modify: `baldrick/db/models.py`
 - Test: `tests/test_db_migrations.py`
 
 - [ ] Add a failing test showing a foreign-key violation is currently accepted.
@@ -102,7 +102,7 @@
 ## Task 6: Make symbol caching complete and supervised
 
 **Files:**
-- Modify: `blackadder/db/process.py`
+- Modify: `baldrick/db/process.py`
 - Test: `tests/test_process_db.py`
 
 - [ ] Add a failing test proving a memory-cache hit loses source file and line.
@@ -116,8 +116,8 @@
 ## Task 7: Centralize subprocess lifecycle policy
 
 **Files:**
-- Create: `blackadder/binutils/runner.py`
-- Modify: `blackadder/binutils/parser.py`
+- Create: `baldrick/binutils/runner.py`
+- Modify: `baldrick/binutils/parser.py`
 - Modify: binutils construction sites
 - Test: `tests/test_subprocess_runner.py`
 - Test: `tests/test_binutils_parser.py`
@@ -132,17 +132,17 @@
 ## Task 8: Split CLI responsibilities and delete obsolete paths
 
 **Files:**
-- Modify: `blackadder/cli/main.py`
-- Create: focused modules under `blackadder/cli/`
+- Modify: `baldrick/cli/main.py`
+- Create: focused modules under `baldrick/cli/`
 - Delete: unregistered placeholder command module(s), after call-site verification
-- Modify: `blackadder/db/rootfs.py`
+- Modify: `baldrick/db/rootfs.py`
 - Test: CLI help and command tests
 
 - [ ] Record `rg` evidence for active decorators, imports, and legacy method callers.
 - [ ] Add/retain command registration tests that assert the existing top-level command set and help output.
 - [ ] Move related commands into cohesive registration modules without changing names/options.
 - [ ] Remove obsolete rootfs writers referencing superseded `dwarftype`/`debugline` shapes and unregistered placeholder commands with no callers.
-- [ ] Run CLI tests, `python -m blackadder.cli.main --help`, and the database tests affected by deletion.
+- [ ] Run CLI tests, `python -m baldrick.cli.main --help`, and the database tests affected by deletion.
 - [ ] Commit with `refactor: separate cli command responsibilities`.
 
 ## Task 9: Establish clean local and CI quality gates
@@ -156,7 +156,7 @@
 - [ ] Apply mechanical Ruff formatting/import fixes, then make minimal manual fixes for remaining diagnostics.
 - [ ] Resolve Mypy errors with accurate annotations and narrowing; do not silence whole modules.
 - [ ] Add GitHub Actions for Python 3.12, 3.13, and 3.14 running tests, plus dedicated Ruff/format/Mypy gates.
-- [ ] Run `ruff format --check`, `ruff check`, `mypy blackadder`, and `pytest --no-cov`.
+- [ ] Run `ruff format --check`, `ruff check`, `mypy baldrick`, and `pytest --no-cov`.
 - [ ] Inspect `git diff --check` and confirm `tests/gdb-scripts` is unstaged.
 - [ ] Commit with `ci: enforce tests lint formatting and types`.
 

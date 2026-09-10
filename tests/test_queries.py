@@ -2,9 +2,9 @@
 
 import sqlite3
 
-from blackadder.models import addr_to_db
-from blackadder.queries import load_query_registry
-from blackadder.query import BlackadderQuery
+from baldrick.models import addr_to_db
+from baldrick.queries import load_query_registry
+from baldrick.query import BaldrickQuery
 
 
 def test_deadlock_threads_uses_sqlmodel_table_name():
@@ -42,7 +42,7 @@ def test_snapshot_addr2line_accepts_unsigned_kernel_address(tmp_path):
         )
         connection.execute("INSERT INTO symbolcache VALUES (1, 16, 'entry', 'kernel.c', 12)")
 
-    frame = BlackadderQuery(str(database_path)).run("addr2line-snap", id=7, addr=hex(address))
+    frame = BaldrickQuery(str(database_path)).run("addr2line-snap", id=7, addr=hex(address))
 
     assert frame["symbol"].to_list() == ["entry"]
     assert frame["offset"].to_list() == [16]

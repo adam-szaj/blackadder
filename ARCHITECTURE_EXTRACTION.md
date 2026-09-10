@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the architecture abstraction layer that was extracted from the blackadder codebase. Previously, architecture-specific code for x86-64 was hardcoded throughout the codebase. This has been refactored into a modular system supporting x86, x86-64, ARM (32-bit), and ARM64 (64-bit).
+This document describes the architecture abstraction layer that was extracted from the baldrick codebase. Previously, architecture-specific code for x86-64 was hardcoded throughout the codebase. This has been refactored into a modular system supporting x86, x86-64, ARM (32-bit), and ARM64 (64-bit).
 
 ## Motivation
 
@@ -17,12 +17,12 @@ This document describes the architecture abstraction layer that was extracted fr
 - Factory functions for instantiation and detection
 - Composable design allows future extensions (RISC-V, etc.)
 
-## Architecture Module (`blackadder/arch/`)
+## Architecture Module (`baldrick/arch/`)
 
 ### Files
 
 ```
-blackadder/arch/
+baldrick/arch/
   __init__.py          # Package exports and API
   base.py              # Abstract base class and RegisterInfo dataclass
   x86.py               # X86Architecture and X86_64Architecture
@@ -209,22 +209,22 @@ class MemoryAnalyzer:
 ### Detecting Architecture from Binary
 
 ```python
-from blackadder.arch import detect_architecture
+from baldrick.arch import detect_architecture
 
 # Auto-detect from ELF file
 arch = detect_architecture("/bin/bash")
 print(f"Binary is {arch.arch_variant}")  # "x86_64"
 
 # Get instance by name
-from blackadder.arch import get_architecture
+from baldrick.arch import get_architecture
 arm_arch = get_architecture("arm64")
 ```
 
 ### Using with FunctionHasher
 
 ```python
-from blackadder.binutils.hasher import FunctionHasher
-from blackadder.arch import detect_architecture
+from baldrick.binutils.hasher import FunctionHasher
+from baldrick.arch import detect_architecture
 
 arch = detect_architecture("/usr/lib/libm.so.6")
 hasher = FunctionHasher(config, architecture=arch)
@@ -236,8 +236,8 @@ fingerprints = await hasher.compute_fingerprints("/usr/lib/libm.so.6")
 ### Using with MemoryAnalyzer
 
 ```python
-from blackadder.memory_analyzer import MemoryAnalyzer
-from blackadder.arch import get_architecture
+from baldrick.memory_analyzer import MemoryAnalyzer
+from baldrick.arch import get_architecture
 
 arm64_arch = get_architecture("arm64")
 analyzer = MemoryAnalyzer(config, architecture=arm64_arch)

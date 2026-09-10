@@ -7,7 +7,7 @@ All three Phase 2 components have been **fully implemented, tested, and document
 - **Phase 2.2**: Core Dump Parsing
 - **Phase 2.3**: Enhanced Memory Analysis
 
-**Blackadder v0.3.0 is ready.**
+**Baldrick v0.3.0 is ready.**
 
 ---
 
@@ -318,7 +318,7 @@ cat backtrace.txt | baldrick decode-backtrace --pid 12345
 
 ## Summary
 
-**Phase 2 is production-ready.** Blackadder now provides:
+**Phase 2 is production-ready.** Baldrick now provides:
 
 1. **Complete Process Analysis**
    - Live and offline crash debugging
@@ -348,18 +348,18 @@ cat backtrace.txt | baldrick decode-backtrace --pid 12345
 ## Files Overview
 
 ### Core Implementation
-- `blackadder/binutils/hasher.py` (217)
-- `blackadder/binutils/matcher.py` (126)
-- `blackadder/binutils/coredump.py` (258)
-- `blackadder/memory_analyzer.py` (227)
-- `blackadder/db/rootfs.py` (133)
+- `baldrick/binutils/hasher.py` (217)
+- `baldrick/binutils/matcher.py` (126)
+- `baldrick/binutils/coredump.py` (258)
+- `baldrick/memory_analyzer.py` (227)
+- `baldrick/db/rootfs.py` (133)
 
 ### Model & Database
-- `blackadder/models.py` (+350 lines)
-- `blackadder/db/process.py` (+200 lines)
+- `baldrick/models.py` (+350 lines)
+- `baldrick/db/process.py` (+200 lines)
 
 ### CLI
-- `blackadder/cli/main.py` (+120 lines)
+- `baldrick/cli/main.py` (+120 lines)
 
 ### Tests
 - `tests/test_hasher.py` (286)
@@ -381,7 +381,7 @@ cat backtrace.txt | baldrick decode-backtrace --pid 12345
 
 ## Conclusion
 
-Blackadder v0.3.0 represents a mature, production-ready debugging engine with comprehensive support for:
+Baldrick v0.3.0 represents a mature, production-ready debugging engine with comprehensive support for:
 - Binary metadata extraction and analysis
 - Live process memory introspection
 - Offline crash analysis via core dumps

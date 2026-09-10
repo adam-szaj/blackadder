@@ -5,7 +5,7 @@ Tests heap analyzer across common corruption patterns.
 
 import pytest
 
-from blackadder.heap_analyzer import (
+from baldrick.heap_analyzer import (
     HeapAllocation,
     HeapAnalyzer,
     HeapAnomalyType,

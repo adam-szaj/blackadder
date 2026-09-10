@@ -19,7 +19,7 @@ Applied comprehensive refactoring of exception handling, logging, and type annot
 
 ✅ **Import Error (FIXED)**
 - Problem: `init_parser` listed in `__all__` but not imported
-- Solution: Added `init_parser` import to `blackadder/binutils/__init__.py`
+- Solution: Added `init_parser` import to `baldrick/binutils/__init__.py`
 
 ✅ **Type Annotations (FIXED)**
 - Problem: Using Optional[X] syntax (deprecated style)

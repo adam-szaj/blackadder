@@ -1,5 +1,5 @@
 def main():
-    print("Hello from blackadder-github!")
+    print("Hello from baldrick-github!")
 
 
 if __name__ == "__main__":

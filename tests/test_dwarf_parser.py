@@ -1,5 +1,5 @@
 """
-Tests for blackadder.binutils.dwarf_parser.
+Tests for baldrick.binutils.dwarf_parser.
 
 Tests parse_dwarf_types_from_text() and parse_debug_line_from_text() using
 minimal synthetic inputs and (where available) the real dump file from
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from blackadder.binutils.dwarf_parser import (
+from baldrick.binutils.dwarf_parser import (
     parse_debug_line_from_text,
     parse_dwarf_types_from_text,
 )

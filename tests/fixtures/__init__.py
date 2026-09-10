@@ -1,1 +1,1 @@
-"""Test fixtures and mock data for blackadder tests."""
+"""Test fixtures and mock data for baldrick tests."""

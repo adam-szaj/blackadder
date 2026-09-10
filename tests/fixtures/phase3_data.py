@@ -7,7 +7,7 @@ for testing Advanced CLI commands and Register Interpreter.
 
 from datetime import datetime
 
-from blackadder.models import MemoryMapping, ProcessSnapshot
+from baldrick.models import MemoryMapping, ProcessSnapshot
 
 # ============================================================================
 # Mock Process Data

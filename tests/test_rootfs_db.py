@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from blackadder.config import BlackadderConfig
-from blackadder.db.rootfs import PAYLOAD_SENTINEL, BinaryPayload, RootfsDatabase
+from baldrick.config import BaldrickConfig
+from baldrick.db.rootfs import PAYLOAD_SENTINEL, BinaryPayload, RootfsDatabase
 
 
 class _Result:
@@ -117,7 +117,7 @@ def _payload() -> BinaryPayload:
 
 @pytest.mark.asyncio
 async def test_apply_payload_writes_symbols_for_new_binary():
-    database = RootfsDatabase(SimpleNamespace(), BlackadderConfig())
+    database = RootfsDatabase(SimpleNamespace(), BaldrickConfig())
     connection = _Connection()
 
     counts = await database._apply_payload(connection, _payload())
@@ -131,7 +131,7 @@ async def test_apply_payload_writes_symbols_for_new_binary():
 
 @pytest.mark.asyncio
 async def test_apply_payload_owns_members_through_binary_reference():
-    database = RootfsDatabase(SimpleNamespace(), BlackadderConfig())
+    database = RootfsDatabase(SimpleNamespace(), BaldrickConfig())
     connection = _Connection()
     payload = _payload()
     payload.symbols = []
@@ -152,7 +152,7 @@ async def test_apply_payload_owns_members_through_binary_reference():
 
 @pytest.mark.asyncio
 async def test_payload_writer_propagates_terminal_batch_error():
-    database = RootfsDatabase(SimpleNamespace(engine=_Engine()), BlackadderConfig())
+    database = RootfsDatabase(SimpleNamespace(engine=_Engine()), BaldrickConfig())
     database._apply_payload = AsyncMock(side_effect=ValueError("invalid payload"))
     queue = asyncio.Queue()
     await queue.put(_payload())
@@ -164,7 +164,7 @@ async def test_payload_writer_propagates_terminal_batch_error():
 
 @pytest.mark.asyncio
 async def test_payload_writer_counts_only_committed_attempt():
-    database = RootfsDatabase(SimpleNamespace(engine=_RetryEngine()), BlackadderConfig())
+    database = RootfsDatabase(SimpleNamespace(engine=_RetryEngine()), BaldrickConfig())
     database._apply_payload = AsyncMock(
         return_value={
             "loaded": 1,

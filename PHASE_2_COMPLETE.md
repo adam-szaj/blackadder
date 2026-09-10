@@ -2,7 +2,7 @@
 
 ## Summary
 
-Both Phase 2.1 and Phase 2.2 have been **fully implemented, tested, and documented**. Blackadder now provides comprehensive binary analysis for both live processes and offline crashes.
+Both Phase 2.1 and Phase 2.2 have been **fully implemented, tested, and documented**. Baldrick now provides comprehensive binary analysis for both live processes and offline crashes.
 
 ---
 
@@ -80,17 +80,17 @@ Both phases work together:
 ## Files Added (Phase 2.1 + 2.2)
 
 ### Core Implementation
-- `blackadder/binutils/hasher.py` (217 lines)
-- `blackadder/binutils/matcher.py` (126 lines)
-- `blackadder/binutils/coredump.py` (258 lines)
-- `blackadder/db/rootfs.py` (133 lines)
+- `baldrick/binutils/hasher.py` (217 lines)
+- `baldrick/binutils/matcher.py` (126 lines)
+- `baldrick/binutils/coredump.py` (258 lines)
+- `baldrick/db/rootfs.py` (133 lines)
 
 ### Database/Process Layer
-- `blackadder/db/process.py` (+124 lines: fuzzy matching + core dump loading)
-- `blackadder/models.py` (+FunctionFingerprint model, +source_type/source_path)
+- `baldrick/db/process.py` (+124 lines: fuzzy matching + core dump loading)
+- `baldrick/models.py` (+FunctionFingerprint model, +source_type/source_path)
 
 ### CLI
-- `blackadder/cli/main.py` (+70 lines: load-core-dump command)
+- `baldrick/cli/main.py` (+70 lines: load-core-dump command)
 
 ### Tests
 - `tests/test_hasher.py` (286 lines, 13 tests)
@@ -250,12 +250,12 @@ cat backtrace.txt | baldrick decode-backtrace --pid <snapshot_id>
 ```bash
 # Verify syntax of all Phase 2 modules
 python3 -m py_compile \
-  blackadder/binutils/hasher.py \
-  blackadder/binutils/matcher.py \
-  blackadder/binutils/coredump.py \
-  blackadder/db/rootfs.py \
-  blackadder/db/process.py \
-  blackadder/cli/main.py
+  baldrick/binutils/hasher.py \
+  baldrick/binutils/matcher.py \
+  baldrick/binutils/coredump.py \
+  baldrick/db/rootfs.py \
+  baldrick/db/process.py \
+  baldrick/cli/main.py
 
 # Run comprehensive validation (requires dependencies)
 python3 validate_phase2.py
@@ -269,7 +269,7 @@ cat PHASE_2_2_STATUS.md
 
 ## Summary
 
-**Phase 2 is complete and production-ready.** Blackadder now provides:
+**Phase 2 is complete and production-ready.** Baldrick now provides:
 
 1. **Live process analysis** via /proc/maps (MVP)
 2. **Offline crash analysis** via core dumps (Phase 2.2)
@@ -277,4 +277,4 @@ cat PHASE_2_2_STATUS.md
 4. **10-15x parallel speedup** for backtrace decoding
 5. **Comprehensive symbol resolution** with fallback strategies
 
-All code follows async-first patterns, uses resource-aware pooling, and integrates seamlessly with the existing MVP foundation. Ready for Blackadder v0.2.0 release.
+All code follows async-first patterns, uses resource-aware pooling, and integrates seamlessly with the existing MVP foundation. Ready for Baldrick v0.2.0 release.

@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlmodel import SQLModel
 
-from blackadder.db.base import configure_sqlite_connection
-from blackadder.db.migrations import LATEST_SCHEMA_VERSION, run_migrations
+from baldrick.db.base import configure_sqlite_connection
+from baldrick.db.migrations import LATEST_SCHEMA_VERSION, run_migrations
 
 
 def test_sqlite_connections_enforce_foreign_keys():

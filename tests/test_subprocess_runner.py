@@ -4,17 +4,17 @@ import sys
 
 import pytest
 
-from blackadder.binutils.runner import (
+from baldrick.binutils.runner import (
     SubprocessExecutionError,
     SubprocessRunner,
     SubprocessTimeoutError,
 )
-from blackadder.config import BlackadderConfig
+from baldrick.config import BaldrickConfig
 
 
 @pytest.mark.asyncio
 async def test_runner_collects_output_and_invokes_callback():
-    runner = SubprocessRunner(BlackadderConfig())
+    runner = SubprocessRunner(BaldrickConfig())
     streamed = []
 
     lines = await runner.run(
@@ -28,7 +28,7 @@ async def test_runner_collects_output_and_invokes_callback():
 
 @pytest.mark.asyncio
 async def test_runner_reports_nonzero_exit_with_stderr():
-    runner = SubprocessRunner(BlackadderConfig())
+    runner = SubprocessRunner(BaldrickConfig())
 
     with pytest.raises(SubprocessExecutionError, match="failure detail") as error:
         await runner.run(
@@ -44,7 +44,7 @@ async def test_runner_reports_nonzero_exit_with_stderr():
 
 @pytest.mark.asyncio
 async def test_runner_terminates_timed_out_process():
-    runner = SubprocessRunner(BlackadderConfig(subprocess_timeout_seconds=0.05))
+    runner = SubprocessRunner(BaldrickConfig(subprocess_timeout_seconds=0.05))
 
     with pytest.raises(SubprocessTimeoutError, match="timed out"):
         await runner.run([sys.executable, "-c", "import time; time.sleep(10)"])

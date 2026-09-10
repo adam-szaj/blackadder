@@ -2,7 +2,7 @@
 
 ## Context
 
-Blackadder is a Typer CLI that imports binaries, DWARF metadata, process maps,
+Baldrick is a Typer CLI that imports binaries, DWARF metadata, process maps,
 registers, stacks, and core dumps into SQLite through SQLModel, then runs symbol
 resolution and analyzers over that data. The review found correctness defects at
 the database boundary, binary-local DWARF data represented as global data,

@@ -292,23 +292,23 @@ async def test_backtrace_decode_100_frames(process_db):
 ## Files to Modify
 
 ### New Files
-- `blackadder/exceptions.py` - Custom exceptions
-- `blackadder/logging_config.py` - Logging setup
+- `baldrick/exceptions.py` - Custom exceptions
+- `baldrick/logging_config.py` - Logging setup
 - `tests/test_performance.py` - Performance benchmarks
 - `tests/test_edge_cases.py` - Edge case coverage
 - `docs/TROUBLESHOOTING.md` - User guide
 - `docs/ERROR_CODES.md` - Error reference
 
 ### Modified Files
-- `blackadder/memory_analyzer.py` - Error handling, validation
-- `blackadder/binutils/coredump.py` - Error handling, limits
-- `blackadder/binutils/hasher.py` - Error handling
-- `blackadder/binutils/matcher.py` - Error handling
-- `blackadder/db/process.py` - Error handling, timeouts
-- `blackadder/db/rootfs.py` - Error handling
-- `blackadder/cli/main.py` - Validation, error display
-- `blackadder/config.py` - Resource limits
-- `blackadder/models.py` - Validation rules
+- `baldrick/memory_analyzer.py` - Error handling, validation
+- `baldrick/binutils/coredump.py` - Error handling, limits
+- `baldrick/binutils/hasher.py` - Error handling
+- `baldrick/binutils/matcher.py` - Error handling
+- `baldrick/db/process.py` - Error handling, timeouts
+- `baldrick/db/rootfs.py` - Error handling
+- `baldrick/cli/main.py` - Validation, error display
+- `baldrick/config.py` - Resource limits
+- `baldrick/models.py` - Validation rules
 - `CLAUDE.md` - Error handling guidelines
 
 ---

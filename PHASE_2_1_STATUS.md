@@ -6,7 +6,7 @@ Phase 2.1 (Binary Matching) has been **fully implemented** with all core compone
 
 ## What Was Built
 
-### 1. ORM Models (blackadder/models.py)
+### 1. ORM Models (baldrick/models.py)
 
 ✅ **FunctionFingerprint** model added:
 - `binary_id`: Foreign key to Binary
@@ -19,7 +19,7 @@ Phase 2.1 (Binary Matching) has been **fully implemented** with all core compone
 ✅ **Binary** model updated:
 - Added `fingerprints` relationship for reverse lookup
 
-### 2. Function Hasher Module (blackadder/binutils/hasher.py)
+### 2. Function Hasher Module (baldrick/binutils/hasher.py)
 
 ✅ **FunctionHasher** class - Extract and hash function bodies:
 - `compute_fingerprints(binary_path)`: Main entry point
@@ -51,7 +51,7 @@ Phase 2.1 (Binary Matching) has been **fully implemented** with all core compone
 - Minor version differences (some functions may change)
 - Compiler variations (same code, different immediates)
 
-### 3. Binary Matcher Module (blackadder/binutils/matcher.py)
+### 3. Binary Matcher Module (baldrick/binutils/matcher.py)
 
 ✅ **BinaryMatcher** class - Match fingerprints:
 - `find_matches(target_fps, candidates, session, threshold)`: Find best matches
@@ -74,7 +74,7 @@ Phase 2.1 (Binary Matching) has been **fully implemented** with all core compone
   - Query FunctionFingerprint table by binary_id
   - Returns `{func_name: content_hash}` dict or `{}`
 
-### 4. Rootfs Database (blackadder/db/rootfs.py)
+### 4. Rootfs Database (baldrick/db/rootfs.py)
 
 ✅ **RootfsDatabase** class - Binary metadata management:
 - `compute_and_cache_fingerprints(binary_id, binary_path)`: Extract and store
@@ -94,7 +94,7 @@ Phase 2.1 (Binary Matching) has been **fully implemented** with all core compone
 - `has_fingerprints(binary_id)`: Check if computed
   - Returns bool
 
-### 5. Process Database Enhancement (blackadder/db/process.py)
+### 5. Process Database Enhancement (baldrick/db/process.py)
 
 ✅ **ProcessDatabase** updated:
 - `identify_process_binaries_fuzzy(process_id, rootfs_session, match_threshold)`: New method

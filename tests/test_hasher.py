@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from blackadder.arch.x86 import X86_64Architecture
-from blackadder.binutils.hasher import FunctionHasher
+from baldrick.arch.x86 import X86_64Architecture
+from baldrick.binutils.hasher import FunctionHasher
 
 
 @pytest.fixture
@@ -232,7 +232,7 @@ class TestFingerprintMatching:
 
     def test_identical_fingerprints_match_perfectly(self):
         """Test that identical fingerprints score 1.0."""
-        from blackadder.binutils.matcher import BinaryMatcher
+        from baldrick.binutils.matcher import BinaryMatcher
 
         target = {"main": "hash1", "foo": "hash2", "bar": "hash3"}
         candidate = {"main": "hash1", "foo": "hash2", "bar": "hash3"}
@@ -242,7 +242,7 @@ class TestFingerprintMatching:
 
     def test_no_common_functions_score_zero(self):
         """Test that no matching functions score 0.0."""
-        from blackadder.binutils.matcher import BinaryMatcher
+        from baldrick.binutils.matcher import BinaryMatcher
 
         target = {"main": "hash1", "foo": "hash2"}
         candidate = {"other": "hash3", "baz": "hash4"}
@@ -252,7 +252,7 @@ class TestFingerprintMatching:
 
     def test_partial_match_scores_correctly(self):
         """Test partial matches score between 0 and 1."""
-        from blackadder.binutils.matcher import BinaryMatcher
+        from baldrick.binutils.matcher import BinaryMatcher
 
         target = {"main": "hash1", "foo": "hash2", "bar": "hash3"}
         candidate = {"main": "hash1", "foo": "hash2", "other": "hash4"}
@@ -263,7 +263,7 @@ class TestFingerprintMatching:
 
     def test_empty_fingerprints_score_zero(self):
         """Test that empty fingerprints score 0.0."""
-        from blackadder.binutils.matcher import BinaryMatcher
+        from baldrick.binutils.matcher import BinaryMatcher
 
         target = {}
         candidate = {"main": "hash1"}
@@ -273,7 +273,7 @@ class TestFingerprintMatching:
 
     def test_score_matches_both_empty_zero(self):
         """Test that both empty fingerprints score 0.0."""
-        from blackadder.binutils.matcher import BinaryMatcher
+        from baldrick.binutils.matcher import BinaryMatcher
 
         target = {}
         candidate = {}
@@ -283,7 +283,7 @@ class TestFingerprintMatching:
 
     def test_function_reordering_doesnt_affect_score(self):
         """Test that function order doesn't matter."""
-        from blackadder.binutils.matcher import BinaryMatcher
+        from baldrick.binutils.matcher import BinaryMatcher
 
         target = {"main": "hash1", "foo": "hash2", "bar": "hash3"}
         candidate = {"bar": "hash3", "main": "hash1", "foo": "hash2"}
@@ -293,7 +293,7 @@ class TestFingerprintMatching:
 
     def test_score_handles_subset_correctly(self):
         """Test scoring when one set is subset of other."""
-        from blackadder.binutils.matcher import BinaryMatcher
+        from baldrick.binutils.matcher import BinaryMatcher
 
         # Target has more functions
         target = {"main": "hash1", "foo": "hash2", "bar": "hash3", "extra": "hash4"}

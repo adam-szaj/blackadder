@@ -2,7 +2,7 @@
 
 ## Code Statistics
 
-### New Code (blackadder/arch/)
+### New Code (baldrick/arch/)
 
 | File | Lines | Classes | Methods | Registers | Purpose |
 |------|-------|---------|---------|-----------|---------|
@@ -100,7 +100,7 @@ Cache usage: O(1)
 ### MyPy Analysis
 
 ```
-blackadder/arch/: 6 files analyzed
+baldrick/arch/: 6 files analyzed
 Errors: 0
 Type coverage: 100%
 - All register definitions typed as RegisterInfo
@@ -182,7 +182,7 @@ test_unsupported_machine_type()
 **Breaking changes**: 0
 
 **Process**:
-1. Create `blackadder/arch/risc_v.py` (200-250 lines)
+1. Create `baldrick/arch/risc_v.py` (200-250 lines)
 2. Update `ARCHITECTURE_MAP` in detector.py (+1 line)
 3. Update exports in `__init__.py` (+1 line)
 4. Update documentation (+1 page)

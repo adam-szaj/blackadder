@@ -1,4 +1,4 @@
-# Blackadder — built-in queries
+# Baldrick — built-in queries
 
 Run any query with:
 

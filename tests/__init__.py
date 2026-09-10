@@ -1,1 +1,1 @@
-"""Test suite for blackadder."""
+"""Test suite for baldrick."""

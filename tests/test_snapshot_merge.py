@@ -12,10 +12,10 @@ import pytest
 import pytest_asyncio
 from sqlmodel import select
 
-from blackadder.config import BlackadderConfig
-from blackadder.db import AsyncDatabaseManager, ProcessDatabase
-from blackadder.exceptions import DatabaseConstraintError, ProcessNotFoundError
-from blackadder.models import (
+from baldrick.config import BaldrickConfig
+from baldrick.db import AsyncDatabaseManager, ProcessDatabase
+from baldrick.exceptions import DatabaseConstraintError, ProcessNotFoundError
+from baldrick.models import (
     BacktraceEntry,
     MemoryMapping,
     ProcessRegisterState,
@@ -60,7 +60,7 @@ rip            0x7f00  0x7f00
 
 @pytest_asyncio.fixture
 async def db() -> ProcessDatabase:
-    config = BlackadderConfig(
+    config = BaldrickConfig(
         max_subprocess_workers=2,
         max_symbol_cache_size=100,
     )

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from blackadder.binutils.coredump import CoreDumpParser
+from baldrick.binutils.coredump import CoreDumpParser
 
 
 class TestParseElfHeaders:
