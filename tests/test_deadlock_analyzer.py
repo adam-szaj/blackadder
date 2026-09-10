@@ -405,6 +405,8 @@ class TestDeadlockReport:
         assert report.suspected_threads == []
         assert report.evidence_level == "none"
         assert report.summary == ""
+        assert report.lock_state == []
+        assert report.condition_waits == []
 
     def test_dataclass_serializable(self):
         """DeadlockReport must be serializable with dataclasses.asdict."""

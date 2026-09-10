@@ -9,6 +9,7 @@ Covers:
 """
 
 from blackadder.binutils.gdb_dump import (
+    parse_condition_state,
     parse_gdb_dump,
     parse_gdb_registers_only,
     parse_lock_state,
@@ -84,6 +85,15 @@ BALDRICK_LOCK_STATE_BEGIN
 {"pid": 3000, "tid": 3001, "name": "good", "gdb_thread_num": 1, "blocking_function": "___pthread_mutex_lock", "lock_type": "mutex", "waiting_for_addr": "0x7f000001", "lock_symbol": "mtx", "owner_tid": 3002, "reader_count": 0}
 {"tid": 3999, "error": "frame access failed"}
 BALDRICK_LOCK_STATE_END
+"""
+
+_ENRICHED_SYNC_STATE = """\
+BALDRICK_LOCK_STATE_BEGIN
+{"pid":1,"tid":11,"gdb_thread_num":2,"blocking_function":"pthread_mutex_lock","lock_type":"mutex","waiting_for_addr":"0x1028","owner_tid":12,"reader_count":0,"confidence":"certain","abi_status":"supported","analysis_call_depth":3,"mutex_object":{"address":"0x1000","type":"Queue","field":"queue.mutex","field_offset":40,"source":"global","confidence":"certain"},"owner_acquisition":{"tid":12,"frame_level":4,"function":"Queue::push","file":"queue.cpp","line":42,"operation":"mutex_lock","call_depth":1,"confidence":"probable","reason":"exact mutex argument remains locked on the analyzed path"}}
+BALDRICK_LOCK_STATE_END
+BALDRICK_COND_STATE_BEGIN
+{"record_type":"condition_wait","pid":1,"tid":13,"gdb_thread_num":3,"blocking_function":"std::condition_variable::wait","condition_address":"0x1050","mutex_address":"0x1028","same_containing_object":true,"condition_object":{"address":"0x1000","type":"Queue","field":"queue.changed","field_offset":80,"source":"global","confidence":"certain"},"mutex_object":{"address":"0x1000","type":"Queue","field":"queue.mutex","field_offset":40,"source":"global","confidence":"certain"},"containing_object":{"address":"0x1000","type":"Queue","field":"queue.changed","field_offset":80,"source":"global","confidence":"certain"},"wait_frame":{"frame_level":8,"function":"Queue::pop","file":"queue.cpp","line":60},"wake_candidates":[{"tid":11,"frame_level":2,"function":"Queue::push","file":"queue.cpp","line":45,"operation":"condition_signal","call_depth":2,"confidence":"probable","reason":"exact condition-variable argument"}],"confidence":"probable","abi_status":"supported","analysis_call_depth":3}
+BALDRICK_COND_STATE_END
 """
 
 _REGISTERS_X86_64 = """\
@@ -445,6 +455,47 @@ BALDRICK_LOCK_STATE_END
         assert owner_map[9001] == 9002
         assert owner_map[9002] == 9001
         assert owner_map[9003] == 9001
+
+    def test_enriched_mutex_object_and_acquisition(self):
+        entry = parse_lock_state(_ENRICHED_SYNC_STATE)[0]
+
+        assert entry.abi_status == "supported"
+        assert entry.mutex_object is not None
+        assert entry.mutex_object.type_name == "Queue"
+        assert entry.mutex_object.field == "queue.mutex"
+        assert entry.owner_acquisition is not None
+        assert entry.owner_acquisition.function == "Queue::push"
+        assert entry.owner_acquisition.line == 42
+
+
+class TestParseConditionState:
+    def test_correlates_condition_mutex_and_containing_object(self):
+        entry = parse_condition_state(_ENRICHED_SYNC_STATE)[0]
+
+        assert entry.condition_address == 0x1050
+        assert entry.mutex_address == 0x1028
+        assert entry.same_containing_object is True
+        assert entry.containing_object is not None
+        assert entry.containing_object.address == 0x1000
+        assert entry.condition_object is not None
+        assert entry.condition_object.field == "queue.changed"
+        assert entry.mutex_object is not None
+        assert entry.mutex_object.field == "queue.mutex"
+
+    def test_parses_wait_frame_and_wake_candidate(self):
+        entry = parse_condition_state(_ENRICHED_SYNC_STATE)[0]
+
+        assert entry.wait_frame is not None
+        assert entry.wait_frame.function == "Queue::pop"
+        assert entry.wait_frame.tid == 13
+        assert len(entry.wake_candidates) == 1
+        assert entry.wake_candidates[0].operation == "condition_signal"
+        assert entry.wake_candidates[0].call_depth == 2
+
+    def test_ignores_lock_records_and_malformed_lines(self):
+        text = _ENRICHED_SYNC_STATE + "\n{not-json}\n"
+
+        assert len(parse_condition_state(text)) == 1
 
 
 # ============================================================================

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 # ============================================================================
 # Data classes
@@ -50,6 +51,8 @@ class DeadlockReport:
     suspected_threads: list[DeadlockThread] = field(default_factory=list)
     evidence_level: str = "none"  # max level across cycles; "none" if no issues
     summary: str = ""
+    lock_state: list[Any] = field(default_factory=list)
+    condition_waits: list[Any] = field(default_factory=list)
 
 
 # ============================================================================

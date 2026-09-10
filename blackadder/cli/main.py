@@ -1513,7 +1513,7 @@ async def analyse_deadlock(
         None,
         "--lock-state",
         "-L",
-        help="Path to find_deadlock GDB output (enables exact mutex ownership analysis)",
+        help="Path to bdr find-deadlock output (mutex and condition-variable analysis)",
     ),
     output_json: bool = typer.Option(False, "--json", help="Output as JSON instead of Rich tables"),
 ) -> None:
@@ -1526,7 +1526,7 @@ async def analyse_deadlock(
       possible — wchan shows futex wait, multiple blocked threads
 
     For highest accuracy provide GDB lock state:
-        gdb -batch -ex "source $(baldrick gdb-path)" -ex find_deadlock ./binary core \\
+        gdb -batch -ex "source $(baldrick gdb-path)" -ex "bdr find-deadlock" ./binary core \\
           > lock.json
         baldrick --db session.db analyse-deadlock -s 1 --lock-state lock.json
 
@@ -1576,9 +1576,12 @@ async def analyse_deadlock(
             f"  Evidence: [{level_color}]{report.evidence_level}[/{level_color}]"
         )
 
-        if report.evidence_level == "none":
+        if report.evidence_level == "none" and not report.condition_waits:
             console.print("[green]✓ No blocked threads detected.[/green]")
             return
+
+        if report.evidence_level == "none":
+            console.print("[green]✓ No mutex deadlock cycle detected.[/green]")
 
         # ── Cycles ────────────────────────────────────────────────────────────
         if report.cycles:
@@ -1613,6 +1616,35 @@ async def analyse_deadlock(
                     f"{dt.waiting_for:#x}" if dt.waiting_for else "—",
                 )
             console.print(sus_table)
+
+        if report.condition_waits:
+            console.print()
+            cond_table = Table(title="Condition Variable Waits", show_header=True)
+            cond_table.add_column("TID", style=_theme.meta, no_wrap=True)
+            cond_table.add_column("Wait frame", style=_theme.symbol)
+            cond_table.add_column("Condition / mutex", style=_theme.address)
+            cond_table.add_column("Containing object", style=_theme.description)
+            cond_table.add_column("Wake candidates", style=_theme.flags)
+            for wait in report.condition_waits:
+                wait_name = wait.wait_frame.function if wait.wait_frame else wait.blocking_function
+                addresses = (
+                    f"{wait.condition_address:#x} / {wait.mutex_address:#x}"
+                    if wait.condition_address and wait.mutex_address
+                    else "partial"
+                )
+                object_name = (
+                    f"{wait.containing_object.type_name} @ {wait.containing_object.address:#x}"
+                    if wait.containing_object
+                    else "—"
+                )
+                candidates = ", ".join(
+                    f"{candidate.function} ({candidate.operation}, d={candidate.call_depth})"
+                    for candidate in wait.wake_candidates[:3]
+                )
+                cond_table.add_row(
+                    str(wait.tid), wait_name, addresses, object_name, candidates or "—"
+                )
+            console.print(cond_table)
 
         # ── Summary ───────────────────────────────────────────────────────────
         if report.summary:

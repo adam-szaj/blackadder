@@ -226,6 +226,34 @@ def parse_gdb_dump(text: str) -> GdbDump:
 
 
 @dataclass
+class SyncObjectEntry:
+    """A synchronization primitive resolved to an enclosing program object."""
+
+    address: int
+    type_name: str
+    field: str
+    field_offset: int
+    source: str
+    confidence: str
+    frame_level: int | None = None
+
+
+@dataclass
+class SyncFrameEntry:
+    """A stack/call-graph frame associated with a synchronization operation."""
+
+    tid: int
+    frame_level: int
+    function: str
+    operation: str
+    call_depth: int
+    confidence: str
+    reason: str
+    file: str | None = None
+    line: int | None = None
+
+
+@dataclass
 class LockStateEntry:
     """One thread's lock blocking info from find_deadlock.py JSON output."""
 
@@ -240,6 +268,74 @@ class LockStateEntry:
     owner_tid: int | None  # TID of thread holding the lock (None = unknown)
     reader_count: int  # For rwlock_read: number of active readers
     confidence: str = "unknown"  # certain | heuristic | unknown
+    abi_status: str = "unknown"
+    mutex_object: SyncObjectEntry | None = None
+    owner_acquisition: SyncFrameEntry | None = None
+    analysis_call_depth: int = 3
+    analysis_truncated: bool = False
+
+
+@dataclass
+class ConditionWaitEntry:
+    """One condition-variable waiter and its correlated mutex/notifier data."""
+
+    pid: int
+    tid: int
+    name: str | None
+    gdb_thread_num: int
+    blocking_function: str
+    condition_address: int | None
+    mutex_address: int | None
+    condition_object: SyncObjectEntry | None
+    mutex_object: SyncObjectEntry | None
+    containing_object: SyncObjectEntry | None
+    same_containing_object: bool
+    wait_frame: SyncFrameEntry | None
+    wake_candidates: list[SyncFrameEntry]
+    confidence: str = "unknown"
+    abi_status: str = "unknown"
+    analysis_call_depth: int = 3
+    analysis_truncated: bool = False
+
+
+def _hex_address(raw) -> int | None:
+    try:
+        return int(raw, 16) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _sync_object(raw: dict | None) -> SyncObjectEntry | None:
+    if not raw:
+        return None
+    address = _hex_address(raw.get("address"))
+    if address is None:
+        return None
+    return SyncObjectEntry(
+        address=address,
+        type_name=raw.get("type", ""),
+        field=raw.get("field", ""),
+        field_offset=int(raw.get("field_offset", 0)),
+        source=raw.get("source", ""),
+        confidence=raw.get("confidence", "unknown"),
+        frame_level=raw.get("frame_level"),
+    )
+
+
+def _sync_frame(raw: dict | None) -> SyncFrameEntry | None:
+    if not raw:
+        return None
+    return SyncFrameEntry(
+        tid=int(raw.get("tid", 0)),
+        frame_level=int(raw.get("frame_level", 0)),
+        function=raw.get("function", ""),
+        operation=raw.get("operation", ""),
+        call_depth=int(raw.get("call_depth", 0)),
+        confidence=raw.get("confidence", "unknown"),
+        reason=raw.get("reason", ""),
+        file=raw.get("file") or None,
+        line=raw.get("line"),
+    )
 
 
 def parse_lock_state(text: str) -> list[LockStateEntry]:
@@ -282,14 +378,6 @@ def parse_lock_state(text: str) -> list[LockStateEntry]:
         if "error" in d:
             continue
 
-        addr_raw = d.get("waiting_for_addr")
-        addr: int | None = None
-        if addr_raw:
-            try:
-                addr = int(addr_raw, 16)
-            except (ValueError, TypeError):
-                pass
-
         entries.append(
             LockStateEntry(
                 pid=int(d.get("pid", 0)),
@@ -298,14 +386,75 @@ def parse_lock_state(text: str) -> list[LockStateEntry]:
                 gdb_thread_num=int(d.get("gdb_thread_num", 0)),
                 blocking_function=d.get("blocking_function", ""),
                 lock_type=d.get("lock_type", "unknown"),
-                waiting_for_addr=addr,
+                waiting_for_addr=_hex_address(d.get("waiting_for_addr")),
                 lock_symbol=d.get("lock_symbol") or None,
                 owner_tid=d.get("owner_tid"),  # int or None
                 reader_count=int(d.get("reader_count", 0)),
                 confidence=d.get("confidence", "unknown"),
+                abi_status=d.get("abi_status", "unknown"),
+                mutex_object=_sync_object(d.get("mutex_object")),
+                owner_acquisition=_sync_frame(d.get("owner_acquisition")),
+                analysis_call_depth=int(d.get("analysis_call_depth", 3)),
+                analysis_truncated=bool(d.get("analysis_truncated", False)),
             )
         )
 
+    return entries
+
+
+def parse_condition_state(text: str) -> list[ConditionWaitEntry]:
+    """Parse condition wait records emitted by ``bdr find-deadlock``."""
+    import json
+
+    entries: list[ConditionWaitEntry] = []
+    in_block = False
+    has_markers = "BALDRICK_COND_STATE_BEGIN" in text
+    for line in text.splitlines():
+        line = line.strip()
+        if line == "BALDRICK_COND_STATE_BEGIN":
+            in_block = True
+            continue
+        if line == "BALDRICK_COND_STATE_END":
+            in_block = False
+            continue
+        if has_markers and not in_block:
+            continue
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if "error" in data or data.get("record_type") != "condition_wait":
+            continue
+        wait_frame = _sync_frame(data.get("wait_frame"))
+        if wait_frame is not None and not wait_frame.tid:
+            wait_frame.tid = int(data.get("tid", 0))
+        entries.append(
+            ConditionWaitEntry(
+                pid=int(data.get("pid", 0)),
+                tid=int(data.get("tid", 0)),
+                name=data.get("name") or None,
+                gdb_thread_num=int(data.get("gdb_thread_num", 0)),
+                blocking_function=data.get("blocking_function", ""),
+                condition_address=_hex_address(data.get("condition_address")),
+                mutex_address=_hex_address(data.get("mutex_address")),
+                condition_object=_sync_object(data.get("condition_object")),
+                mutex_object=_sync_object(data.get("mutex_object")),
+                containing_object=_sync_object(data.get("containing_object")),
+                same_containing_object=bool(data.get("same_containing_object", False)),
+                wait_frame=wait_frame,
+                wake_candidates=[
+                    frame
+                    for item in data.get("wake_candidates", [])
+                    if (frame := _sync_frame(item)) is not None
+                ],
+                confidence=data.get("confidence", "unknown"),
+                abi_status=data.get("abi_status", "unknown"),
+                analysis_call_depth=int(data.get("analysis_call_depth", 3)),
+                analysis_truncated=bool(data.get("analysis_truncated", False)),
+            )
+        )
     return entries
 
 

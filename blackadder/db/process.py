@@ -989,14 +989,14 @@ class ProcessDatabase:
 
         Args:
             process_id:       ProcessSnapshot.id
-            lock_state_text:  Optional raw output from GDB find_deadlock command.
+            lock_state_text:  Optional raw output from GDB ``bdr find-deadlock``.
                               When provided, enables Tier 0 analysis with exact
-                              mutex ownership (evidence_level=certain).
+                              mutex ownership and condition-variable correlation.
 
         Returns:
             DeadlockReport dataclass
         """
-        from blackadder.binutils.gdb_dump import parse_lock_state
+        from blackadder.binutils.gdb_dump import parse_condition_state, parse_lock_state
         from blackadder.deadlock_analyzer import DeadlockAnalyzer
 
         async with self.manager.get_session() as session:
@@ -1031,7 +1031,11 @@ class ProcessDatabase:
         ]
 
         lock_state = parse_lock_state(lock_state_text) if lock_state_text else None
-        return DeadlockAnalyzer(thread_dicts, backtraces, lock_state=lock_state).analyze()
+        report = DeadlockAnalyzer(thread_dicts, backtraces, lock_state=lock_state).analyze()
+        if lock_state_text:
+            report.lock_state = lock_state or []
+            report.condition_waits = parse_condition_state(lock_state_text)
+        return report
 
     async def analyze_memory_layout(
         self,
