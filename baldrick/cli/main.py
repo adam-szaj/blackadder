@@ -34,6 +34,15 @@ from rich.progress import (
 from rich.table import Table
 
 from baldrick.binutils import init_parser, parse_backtrace_auto
+from baldrick.cli.completions import (
+    complete_binary,
+    complete_log_level,
+    complete_pid,
+    complete_snapshot,
+    complete_tag,
+    complete_tag_argument,
+    complete_type,
+)
 from baldrick.cli.gdb_support import register_gdb_commands
 from baldrick.cli.meta_commands import register_meta_commands
 from baldrick.cli.query_commands import register_query_command
@@ -61,7 +70,10 @@ _theme: ColorTheme = ColorTheme()  # default Tokyo Night; overridden in callback
 def _global_options(
     debug: bool = typer.Option(False, "--debug", help="Enable DEBUG level logging"),
     log_level: str = typer.Option(
-        "WARNING", "--log-level", help="Log level (DEBUG, INFO, WARNING, ERROR)"
+        "WARNING",
+        "--log-level",
+        help="Log level (DEBUG, INFO, WARNING, ERROR)",
+        autocompletion=complete_log_level,
     ),
     log_file: str | None = typer.Option(None, "--log-file", help="Write logs to file"),
     db: str | None = typer.Option(
@@ -340,7 +352,11 @@ async def load(
     ),
     maps_file: str | None = typer.Option(None, "--maps", "-m", help="Path to /proc/PID/maps file"),
     pid: int | None = typer.Option(
-        None, "--pid", "-p", help="Running process PID (reads /proc/PID/maps)"
+        None,
+        "--pid",
+        "-p",
+        help="Running process PID (reads /proc/PID/maps)",
+        autocompletion=complete_pid,
     ),
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
@@ -716,8 +732,19 @@ async def load_types(
 
 @app.command()
 async def cast_mem(
-    type_name: str = typer.Option(..., "--type", help="Struct/typedef name to interpret memory as"),
-    binary: str = typer.Option(..., "--binary", "-b", help="Binary name (e.g. libc.so.6)"),
+    type_name: str = typer.Option(
+        ...,
+        "--type",
+        help="Struct/typedef name to interpret memory as",
+        autocompletion=complete_type,
+    ),
+    binary: str = typer.Option(
+        ...,
+        "--binary",
+        "-b",
+        help="Binary name (e.g. libc.so.6)",
+        autocompletion=complete_binary,
+    ),
     mem: str = typer.Option(..., "--mem", help="Hex bytes or @path to binary file"),
     addr: str = typer.Option("0x0", "--addr", help="Base address offset within mem (hex)"),
 ) -> None:
@@ -825,7 +852,13 @@ async def cast_mem(
 @app.command()
 async def load_process(
     maps_file: str | None = typer.Option(None, "--maps", "-m", help="Path to /proc/PID/maps file"),
-    pid: int | None = typer.Option(None, "--pid", "-p", help="Running process PID"),
+    pid: int | None = typer.Option(
+        None,
+        "--pid",
+        "-p",
+        help="Running process PID",
+        autocompletion=complete_pid,
+    ),
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
@@ -839,10 +872,18 @@ async def load_process(
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
     debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
     tag: str | None = typer.Option(
-        None, "--tag", "-T", help="Human-readable label for this snapshot"
+        None,
+        "--tag",
+        "-T",
+        help="Human-readable label for this snapshot",
+        autocompletion=complete_tag,
     ),
     snapshot_id: int | None = typer.Option(
-        None, "--snapshot-id", "-s", help="Merge data into this existing snapshot"
+        None,
+        "--snapshot-id",
+        "-s",
+        help="Merge data into this existing snapshot",
+        autocompletion=complete_snapshot,
     ),
     update: bool = typer.Option(
         False, "--update", "-u", help="Allow updating/merging into an existing snapshot"
@@ -1165,7 +1206,11 @@ async def decode_backtrace(
         None, "--trace", "-t", help="Backtrace file (default: stdin)"
     ),
     snapshot_id: int | None = typer.Option(
-        None, "--snapshot-id", "-s", help="Process snapshot ID (default: latest)"
+        None,
+        "--snapshot-id",
+        "-s",
+        help="Process snapshot ID (default: latest)",
+        autocompletion=complete_snapshot,
     ),
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
     debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
@@ -1264,7 +1309,11 @@ async def decode_address(
         False, "--unmapped", "-A", help="Addresses are offsets within a binary file"
     ),
     snapshot_id: int | None = typer.Option(
-        None, "--snapshot-id", "-s", help="Process snapshot ID for --mapped mode (default: latest)"
+        None,
+        "--snapshot-id",
+        "-s",
+        help="Process snapshot ID for --mapped mode (default: latest)",
+        autocompletion=complete_snapshot,
     ),
     binary_file: str | None = typer.Option(
         None, "--binary", "-b", help="Binary file path (for --unmapped mode)"
@@ -1415,7 +1464,13 @@ async def analyse_memory(
     rootfs: str = typer.Option("/", "--rootfs", "-R", help="Path to rootfs"),
     debugfs: str | None = typer.Option(None, "--debugfs", "-D", help="Path to debugfs"),
     maps_file: str | None = typer.Option(None, "--maps", "-m", help="Path to /proc/PID/maps file"),
-    pid: int | None = typer.Option(None, "--pid", "-p", help="Running process PID"),
+    pid: int | None = typer.Option(
+        None,
+        "--pid",
+        "-p",
+        help="Running process PID",
+        autocompletion=complete_pid,
+    ),
     core_file: str | None = typer.Option(
         None, "--coredump", "-C", help="Path to ELF core dump file"
     ),
@@ -1507,7 +1562,11 @@ async def analyse_memory(
 @app.command()
 async def analyse_deadlock(
     snapshot_id: int | None = typer.Option(
-        None, "--snapshot-id", "-s", help="ProcessSnapshot ID to analyze (default: latest)"
+        None,
+        "--snapshot-id",
+        "-s",
+        help="ProcessSnapshot ID to analyze (default: latest)",
+        autocompletion=complete_snapshot,
     ),
     lock_state_file: str | None = typer.Option(
         None,
@@ -1687,7 +1746,11 @@ async def analyse_deadlock(
 @app.command()
 async def report(
     snapshot_id: int | None = typer.Option(
-        None, "--snapshot-id", "-s", help="ProcessSnapshot ID (default: latest)"
+        None,
+        "--snapshot-id",
+        "-s",
+        help="ProcessSnapshot ID (default: latest)",
+        autocompletion=complete_snapshot,
     ),
     output_json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
@@ -1933,7 +1996,9 @@ async def report(
 @app.command()
 async def tag(
     args: list[str] = typer.Argument(
-        default=None, help="[SNAPSHOT_ID] TAG  — snapshot ID is optional (default: latest)"
+        default=None,
+        help="[SNAPSHOT_ID] TAG  — snapshot ID is optional (default: latest)",
+        autocompletion=complete_tag_argument,
     ),
 ) -> None:
     """

@@ -6,6 +6,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from baldrick.cli.completions import (
+    complete_output_format,
+    complete_query_argument,
+    complete_query_parameter,
+    complete_tag,
+)
 from baldrick.queries import load_query_registry
 from baldrick.query import BaldrickQuery, _db_path, run_query
 from baldrick.theme import ColorTheme, column_style, format_value
@@ -29,6 +35,7 @@ def register_query_command(
                 'Use sql="SELECT ..." to run inline SQL. '
                 'Examples: query threads id=1 | query sql="SELECT * FROM processsnapshot"'
             ),
+            autocompletion=complete_query_argument,
         ),
         param: list[str] = typer.Option(
             [],
@@ -38,18 +45,21 @@ def register_query_command(
                 "Query parameter as key=value "
                 "(can be repeated; alternative to positional key=value)"
             ),
+            autocompletion=complete_query_parameter,
         ),
         tag: str | None = typer.Option(
             None,
             "--tag",
             "-T",
             help="Filter snapshots by tag",
+            autocompletion=complete_tag,
         ),
         fmt: str = typer.Option(
             "rich",
             "--format",
             "-f",
             help="Output format: rich, json, csv",
+            autocompletion=complete_output_format,
         ),
     ) -> None:
         """Run a named SQL query against the database."""
