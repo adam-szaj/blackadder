@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
-# ~/.baldrick-completion.bash — bash completion for baldrick with fzf
+# Advanced bash completion for baldrick with fzf
 #
-# Add to ~/.bashrc:
-#   source ~/.baldrick-completion.bash
+# Source this file after any completion installed by `baldrick --install-completion`:
+#   source /path/to/bash/_baldrick-completion.bash
+# The last sourced completion wins; this script intentionally extends and replaces
+# Typer's standard completion for baldrick.
 #
-# Requirements: fzf, sqlite3
+# Requirements: bash-completion, fzf, sqlite3
 
 # ============================================================================
 # Core infrastructure
 # ============================================================================
+
+_BALDRICK_COMPLETION_COMMANDS=(
+    load load-types cast-mem load-process decode-backtrace decode-address
+    analyse-memory analyse-deadlock report tag query schema version gdb-path
+)
 
 # Resolve DB path: --db from current line, else $BALDRICK_DB.
 _baldrick_resolve_db() {
@@ -67,13 +74,15 @@ _baldrick_fzf_query() {
     fi
 }
 
-# Run SQL and return plain newline-separated list (for COMPREPLY).
+# Run SQL and store a plain newline-separated list in _BALDRICK_SQL_RESULT.
+_BALDRICK_SQL_RESULT=""
 _baldrick_sql_list() {
     local sql="$1"
     local db
     db="$(_baldrick_resolve_db)"
-    [[ -n "$db" && -f "$db" ]] || return
-    sqlite3 "$db" "$sql" 2>/dev/null
+    _BALDRICK_SQL_RESULT=""
+    [[ -n "$db" && -f "$db" ]] || return 1
+    _BALDRICK_SQL_RESULT="$(sqlite3 "$db" "$sql" 2>/dev/null)"
 }
 
 # Return value of an already-typed option from COMP_WORDS.
@@ -150,13 +159,13 @@ _baldrick_pick_query_name() {
 }
 
 # ============================================================================
-# Contextual pickers (use already-typed --pid / --tag from COMP_WORDS)
+# Contextual pickers (use an already-typed --snapshot-id from COMP_WORDS)
 # ============================================================================
 
 # fzf: libraries in a snapshot.
-# Reads snapshot id from argument, or from --pid already on the line.
+# Reads snapshot id from argument, or from --snapshot-id already on the line.
 _baldrick_libs_in_snapshot() {
-    local snap_id="${1:-$(_baldrick_prev_opt --pid)}"
+    local snap_id="${1:-$(_baldrick_prev_opt --snapshot-id)}"
     [[ -z "$snap_id" ]] && return 1
     _baldrick_fzf_query \
         "SELECT DISTINCT pathname FROM memorymapping
@@ -167,7 +176,7 @@ _baldrick_libs_in_snapshot() {
 
 # fzf: binaries mapped in a snapshot.
 _baldrick_binaries_in_snapshot() {
-    local snap_id="${1:-$(_baldrick_prev_opt --pid)}"
+    local snap_id="${1:-$(_baldrick_prev_opt --snapshot-id)}"
     [[ -z "$snap_id" ]] && return 1
     _baldrick_fzf_query \
         "SELECT DISTINCT b.name, m.pathname
@@ -181,7 +190,7 @@ _baldrick_binaries_in_snapshot() {
 
 # fzf: all symbols visible in a snapshot (across all its binaries).
 _baldrick_symbols_in_snapshot() {
-    local snap_id="${1:-$(_baldrick_prev_opt --pid)}"
+    local snap_id="${1:-$(_baldrick_prev_opt --snapshot-id)}"
     [[ -z "$snap_id" ]] && return 1
     _baldrick_fzf_query \
         "SELECT s.name, b.name, hex(s.address)
@@ -215,43 +224,39 @@ _baldrick_symbols_in_binary() {
 _baldrick_complete_load() {
     local cur="$1" prev="$2"
     case "$prev" in
-        --rootfs|-R|--debugfs|-D) _filedir -d; return ;;
-        --maps|-m|--coredump|-C)  _filedir;    return ;;
+        --rootfs|-R|--debugfs|-D|--dirs) _filedir -d; return ;;
+        --files|-f|--maps|-m|--coredump|-C) _filedir; return ;;
         --pid|-p)
             COMPREPLY=( $(compgen -W "$(ls /proc 2>/dev/null | grep '^[0-9]')" -- "$cur") )
             return ;;
     esac
     COMPREPLY=( $(compgen -W \
-        "--rootfs -R --debugfs -D --glob -g --perm -P --files -f --maps -m --pid -p --coredump -C --types -t" \
+        "--rootfs -R --debugfs -D --glob -g --perm -P --files -f --maps -m --pid -p --coredump -C --dirs --types -t --lines -l --maxbin --maxdepth --slow-threshold --slow-top --help -h" \
         -- "$cur") )
 }
 
 _baldrick_complete_load_types() {
     local cur="$1" prev="$2"
     case "$prev" in
-        --binary|-b)
-            _baldrick_pick_binary
-            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
-            return ;;
+        --binary|-b) _filedir; return ;;
     esac
-    COMPREPLY=( $(compgen -W "--binary -b" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--binary -b --help -h" -- "$cur") )
 }
 
 _baldrick_complete_cast_mem() {
     local cur="$1" prev="$2"
     case "$prev" in
-        --binary|-b) _filedir; return ;;
-        --mem)       _filedir; return ;;
-        --type)
-            _baldrick_sql_list "SELECT DISTINCT name FROM dwarftype WHERE tag IN ('structure_type','union_type','typedef') AND name IS NOT NULL ORDER BY name"
-            COMPREPLY=( $(compgen -W "$_BALDRICK_SQL_RESULT" -- "$cur") )
-            return ;;
-        --binary)
+        --binary|-b)
             _baldrick_sql_list "SELECT name FROM binary ORDER BY name"
             COMPREPLY=( $(compgen -W "$_BALDRICK_SQL_RESULT" -- "$cur") )
             return ;;
+        --mem)       _filedir; return ;;
+        --type)
+            _baldrick_sql_list "SELECT DISTINCT name FROM canonical_dwarf_type WHERE tag IN ('structure_type','union_type','typedef') AND name IS NOT NULL ORDER BY name"
+            COMPREPLY=( $(compgen -W "$_BALDRICK_SQL_RESULT" -- "$cur") )
+            return ;;
     esac
-    COMPREPLY=( $(compgen -W "--type --binary -b --mem --addr" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--type --binary -b --mem --addr --help -h" -- "$cur") )
 }
 
 _baldrick_complete_load_process() {
@@ -259,19 +264,22 @@ _baldrick_complete_load_process() {
     case "$prev" in
         --maps|-m)                _filedir;    return ;;
         --coredump|-C)            _filedir;    return ;;
-        --gdb-dump)               _filedir;    return ;;
+        --gdb-dump|-G)            _filedir;    return ;;
+        --pid|-p)
+            COMPREPLY=( $(compgen -W "$(ls /proc 2>/dev/null | grep '^[0-9]')" -- "$cur") )
+            return ;;
         --rootfs|-R|--debugfs|-D) _filedir -d; return ;;
         --tag|-T)
             _baldrick_pick_tag
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
-        --snapshot-id)
+        --snapshot-id|-s)
             _baldrick_pick_snapshot
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
     esac
     COMPREPLY=( $(compgen -W \
-        "--maps -m --pid -p --coredump -C --gdb-dump --rootfs -R --debugfs -D --tag -T --snapshot-id --update" \
+        "--maps -m --pid -p --coredump -C --gdb-dump -G --rootfs -R --debugfs -D --tag -T --snapshot-id -s --update -u --force -f --help -h" \
         -- "$cur") )
 }
 
@@ -279,38 +287,29 @@ _baldrick_complete_decode_backtrace() {
     local cur="$1" prev="$2"
     case "$prev" in
         --trace|-t) _filedir; return ;;
-        --pid|-p)
+        --rootfs|-R|--debugfs|-D) _filedir -d; return ;;
+        --snapshot-id|-s)
             _baldrick_pick_snapshot
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
     esac
     COMPREPLY=( $(compgen -W \
-        "--trace -t --pid -p --rootfs -R --debugfs -D --jobs -j" \
+        "--trace -t --snapshot-id -s --rootfs -R --debugfs -D --jobs -j --help -h" \
         -- "$cur") )
 }
 
 _baldrick_complete_decode_address() {
     local cur="$1" prev="$2"
     case "$prev" in
-        --pid|-p)
+        --rootfs|-R|--debugfs|-D) _filedir -d; return ;;
+        --snapshot-id|-s)
             _baldrick_pick_snapshot
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
-        --binary|-b)
-            # If --pid is already typed, offer binaries scoped to that snapshot;
-            # otherwise offer all binaries in the DB.
-            local snap_id
-            snap_id="$(_baldrick_prev_opt --pid)"
-            if [[ -n "$snap_id" ]]; then
-                _baldrick_binaries_in_snapshot "$snap_id"
-            else
-                _baldrick_pick_binary
-            fi
-            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
-            return ;;
+        --binary|-b) _filedir; return ;;
     esac
     COMPREPLY=( $(compgen -W \
-        "--pid -p --binary -b --mapped -a --unmapped -A --name -n --type -t --section -j --full -F --rootfs -R --debugfs -D" \
+        "--rootfs -R --debugfs -D --mapped -a --unmapped -A --snapshot-id -s --binary -b --name -n --type -t --section -j --full -F --help -h" \
         -- "$cur") )
 }
 
@@ -320,14 +319,22 @@ _baldrick_complete_analyse_memory() {
         --maps|-m)                _filedir;    return ;;
         --coredump|-C)            _filedir;    return ;;
         --rootfs|-R|--debugfs|-D) _filedir -d; return ;;
+        --pid|-p)
+            COMPREPLY=( $(compgen -W "$(ls /proc 2>/dev/null | grep '^[0-9]')" -- "$cur") )
+            return ;;
     esac
     COMPREPLY=( $(compgen -W \
-        "--maps -m --pid -p --coredump -C --rootfs -R --debugfs -D" \
+        "--rootfs -R --debugfs -D --maps -m --pid -p --coredump -C --help -h" \
         -- "$cur") )
 }
 
 _baldrick_complete_tag() {
     local cur="$1" prev="$2"
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--help -h" -- "$cur") )
+        return
+    fi
+
     # Count positional args already typed after 'tag' subcommand
     local pos=0
     local in_cmd=0
@@ -358,11 +365,22 @@ _baldrick_complete_analyse_deadlock() {
             _baldrick_pick_snapshot
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
-        --lock-state)
+        --lock-state|-L)
             _filedir
             return ;;
     esac
-    COMPREPLY=( $(compgen -W "--snapshot-id -s --lock-state --json" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--snapshot-id -s --lock-state -L --json --help -h" -- "$cur") )
+}
+
+_baldrick_complete_report() {
+    local cur="$1" prev="$2"
+    case "$prev" in
+        --snapshot-id|-s)
+            _baldrick_pick_snapshot
+            [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
+            return ;;
+    esac
+    COMPREPLY=( $(compgen -W "--snapshot-id -s --json --help -h" -- "$cur") )
 }
 
 _baldrick_complete_query() {
@@ -380,6 +398,11 @@ _baldrick_complete_query() {
         query_name="$w"; break
     done
 
+    if [[ -z "$query_name" && "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--param -p --tag -T --format -f --help -h" -- "$cur") )
+        return
+    fi
+
     case "$prev" in
         --format|-f)
             COMPREPLY=( $(compgen -W "rich json csv" -- "$cur") )
@@ -388,15 +411,12 @@ _baldrick_complete_query() {
             _baldrick_pick_tag
             [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
             return ;;
-        --sql|-s)
-            # No completion for raw SQL text
-            return ;;
         --param|-p)
             # Context-aware: what param does this query expect?
             case "$query_name" in
                 symbols|sections|symbol-cache|types)
                     # --param binary=<name>
-                    # If --tag or --pid already on line, scope to that snapshot
+                    # If --tag is already on the line, scope to that snapshot.
                     local snap_id
                     snap_id="$(_baldrick_prev_opt --tag)"
                     if [[ -n "$snap_id" ]]; then
@@ -405,8 +425,6 @@ _baldrick_complete_query() {
                         snap_id="$(sqlite3 "$db" \
                             "SELECT id FROM processsnapshot WHERE tag='$snap_id' ORDER BY id DESC LIMIT 1" \
                             2>/dev/null)"
-                    else
-                        snap_id="$(_baldrick_prev_opt --pid)"
                     fi
                     if [[ -n "$snap_id" ]]; then
                         _baldrick_binaries_in_snapshot "$snap_id"
@@ -474,19 +492,17 @@ _baldrick_complete_query() {
             return ;;
     esac
 
-    # First positional after 'query' = query name (or special: list, sql)
+    # First positional after 'query' = query name (or special: list, sql=...).
     if [[ -z "$query_name" ]]; then
-        # Offer built-in specials + fzf over named queries
+        # Offer built-in specials + fzf over named queries.
         case "$cur" in
             l*)  COMPREPLY=( $(compgen -W "list" -- "$cur") ); return ;;
-            s*)  COMPREPLY=( $(compgen -W "sql" -- "$cur") ); return ;;
+            s*)  COMPREPLY=( $(compgen -W "sql=" -- "$cur") ); return ;;
         esac
         _baldrick_pick_query_name
         [[ -n "$_BALDRICK_FZF_RESULT" ]] && COMPREPLY=("$_BALDRICK_FZF_RESULT")
-    elif [[ "$query_name" == "sql" ]]; then
-        COMPREPLY=( $(compgen -W "--sql -s --format -f" -- "$cur") )
     else
-        COMPREPLY=( $(compgen -W "--param -p --tag -T --format -f" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--param -p --tag -T --format -f --help -h" -- "$cur") )
     fi
 }
 
@@ -494,39 +510,50 @@ _baldrick_complete_query() {
 # Main dispatcher
 # ============================================================================
 
+# Use Typer's generated completion for commands without custom behaviour.
+_baldrick_typer_complete() {
+    local executable
+    executable="$(type -P "${COMP_WORDS[0]}")"
+    [[ -n "$executable" ]] || return 1
+
+    local IFS=$'\n'
+    COMPREPLY=( $(env COMP_WORDS="${COMP_WORDS[*]}" \
+        COMP_CWORD="$COMP_CWORD" _BALDRICK_COMPLETE=complete_bash "$executable") )
+}
+
 _baldrick_complete() {
     local cur prev
     cur="${COMP_WORDS[$COMP_CWORD]}"
     prev="${COMP_WORDS[$COMP_CWORD-1]}"
 
     # Global options (before subcommand)
-    local global_opts="--db -d --debug --log-level --log-file --help"
-    local commands="load load-types cast-mem load-process decode-backtrace decode-address analyse-memory analyse-deadlock tag query schema version"
+    local global_opts="--debug --log-level --log-file --db -d --install-completion --show-completion --help -h"
 
     # Handle global options
     case "$prev" in
         --db|-d)      _filedir; return ;;
         --log-file)   _filedir; return ;;
         --log-level)  COMPREPLY=( $(compgen -W "DEBUG INFO WARNING ERROR" -- "$cur") ); return ;;
+        --install-completion|--show-completion) _baldrick_typer_complete; return ;;
     esac
 
     # Find the subcommand in COMP_WORDS
-    local cmd=""
+    local cmd="" known
     local i
     for (( i=1; i<${#COMP_WORDS[@]}; i++ )); do
-        case "${COMP_WORDS[$i]}" in
-            load|load-types|cast-mem|load-process|decode-backtrace|decode-address|analyse-memory|analyse-deadlock|tag|query|schema|version)
+        for known in "${_BALDRICK_COMPLETION_COMMANDS[@]}"; do
+            if [[ "${COMP_WORDS[$i]}" == "$known" ]]; then
                 cmd="${COMP_WORDS[$i]}"
-                break
-                ;;
-        esac
+                break 2
+            fi
+        done
     done
 
     if [[ -z "$cmd" ]]; then
         if [[ "$cur" == -* ]]; then
             COMPREPLY=( $(compgen -W "$global_opts" -- "$cur") )
         else
-            COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+            COMPREPLY=( $(compgen -W "${_BALDRICK_COMPLETION_COMMANDS[*]}" -- "$cur") )
         fi
         return
     fi
@@ -541,14 +568,67 @@ _baldrick_complete() {
         decode-address)     _baldrick_complete_decode_address     "$cur" "$prev" ;;
         analyse-memory)     _baldrick_complete_analyse_memory     "$cur" "$prev" ;;
         analyse-deadlock)   _baldrick_complete_analyse_deadlock   "$cur" "$prev" ;;
+        report)             _baldrick_complete_report             "$cur" "$prev" ;;
         tag)                _baldrick_complete_tag                "$cur" "$prev" ;;
         query)              _baldrick_complete_query              "$cur" "$prev" ;;
-        schema)             COMPREPLY=() ;;
-        version)            COMPREPLY=() ;;
+        schema|version|gdb-path) _baldrick_typer_complete ;;
+        *)                  _baldrick_typer_complete ;;
     esac
 }
 
 complete -F _baldrick_complete baldrick
+
+# Compare the commands supported here with those advertised by the installed
+# baldrick executable. Returns 0 when aligned, 1 for a mismatch, and 2 when the
+# executable cannot be checked.
+baldrick-check-completion() {
+    local executable
+    executable="$(type -P baldrick)"
+    if [[ -z "$executable" ]]; then
+        echo "baldrick-check-completion: baldrick is not available in PATH" >&2
+        return 2
+    fi
+
+    local output
+    if ! output="$(env COMP_WORDS="baldrick " COMP_CWORD=1 \
+        _BALDRICK_COMPLETE=complete_bash "$executable" 2>/dev/null)"; then
+        echo "baldrick-check-completion: cannot read commands from $executable" >&2
+        return 2
+    fi
+
+    local current_commands=() command_name
+    while IFS= read -r command_name; do
+        [[ -n "$command_name" && "$command_name" != -* ]] && current_commands+=("$command_name")
+    done <<< "$output"
+    if (( ${#current_commands[@]} == 0 )); then
+        echo "baldrick-check-completion: $executable returned no commands" >&2
+        return 2
+    fi
+
+    local missing=() stale=() expected actual found
+    for actual in "${current_commands[@]}"; do
+        found=0
+        for expected in "${_BALDRICK_COMPLETION_COMMANDS[@]}"; do
+            [[ "$actual" == "$expected" ]] && { found=1; break; }
+        done
+        (( found )) || missing+=("$actual")
+    done
+    for expected in "${_BALDRICK_COMPLETION_COMMANDS[@]}"; do
+        found=0
+        for actual in "${current_commands[@]}"; do
+            [[ "$expected" == "$actual" ]] && { found=1; break; }
+        done
+        (( found )) || stale+=("$expected")
+    done
+
+    if (( ${#missing[@]} || ${#stale[@]} )); then
+        (( ${#missing[@]} )) && printf 'Missing completion commands: %s\n' "${missing[*]}" >&2
+        (( ${#stale[@]} )) && printf 'Stale completion commands: %s\n' "${stale[*]}" >&2
+        return 1
+    fi
+
+    printf 'Baldrick completion is up to date (%d commands).\n' "${#current_commands[@]}"
+}
 
 # ============================================================================
 # Custom completion helper API — use in your own ~/.bashrc functions
@@ -559,6 +639,7 @@ complete -F _baldrick_complete baldrick
 #   _baldrick_sql_list  "<SQL>"               — plain list (no fzf)
 #   _baldrick_resolve_db                      — current DB path
 #   _baldrick_prev_opt  --opt                 — value of option already typed
+#   baldrick-check-completion                 — verify the installed command set
 #
 #   _baldrick_pick_snapshot                   — fzf: snapshot id
 #   _baldrick_pick_tag                        — fzf: tag
