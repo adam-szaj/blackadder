@@ -83,7 +83,7 @@ async def test_parse_maps_lines():
 
 
 @pytest.mark.asyncio
-async def test_parse_maps_with_anonymous_memory():
+async def test_parse_maps_with_anonymous_memory(process_db):
     """Test parsing anonymous memory regions."""
     lines = [
         "7fffde000000-7ffffe000000 rw-p 00000000 00:00 0",  # No pathname
@@ -93,6 +93,25 @@ async def test_parse_maps_with_anonymous_memory():
 
     assert len(parsed) == 1
     assert parsed[0]["pathname"] == "[anonymous]"
+
+    process = await process_db.load_maps(12345, lines[0])
+    analysis = await process_db.analyze_memory_layout(process.id)
+
+    assert analysis["anomalies"] == []
+
+
+@pytest.mark.asyncio
+async def test_memory_anomalies_include_mapping_context(process_db):
+    maps_text = "7fffde000000-7ffffe000000 rwxp 00000000 00:00 0 [heap]"
+    process = await process_db.load_maps(12345, maps_text)
+
+    analysis = await process_db.analyze_memory_layout(process.id)
+
+    assert analysis["anomalies"]
+    assert all(
+        anomaly.startswith("[heap] 0x7fffde000000-0x7ffffe000000: ")
+        for anomaly in analysis["anomalies"]
+    )
 
 
 @pytest.mark.asyncio

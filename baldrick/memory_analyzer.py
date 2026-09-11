@@ -96,6 +96,7 @@ class MemoryAnalyzer:
             raise ValidationError("Invalid permissions (expected 4 chars like 'rw-p')")
 
         size = end_addr - start_addr
+        has_anonymous_marker = pathname in {"[anon]", "[anonymous]"}
 
         # Check for stack using architecture-specific detection
         arch = architecture or self.architecture
@@ -121,14 +122,14 @@ class MemoryAnalyzer:
             return (MemoryRegionType.VVAR, 0.95)
 
         # JIT heuristic: executable + writable anonymous memory (before generic ANON)
-        if "[anon]" in pathname and "x" in perms and "w" in perms:
+        if has_anonymous_marker and "x" in perms and "w" in perms:
             return (MemoryRegionType.JIT, 0.75)
 
         # Heap heuristic: anonymous mapping without execute
-        if "[anon]" in pathname and "x" not in perms and "w" in perms and size > 0x1000:
+        if has_anonymous_marker and "x" not in perms and "w" in perms and size > 0x1000:
             return (MemoryRegionType.HEAP, 0.70)
 
-        if "[anon]" in pathname or pathname == "":
+        if has_anonymous_marker or pathname == "":
             return (MemoryRegionType.ANON, 0.80)
 
         # Shared libraries

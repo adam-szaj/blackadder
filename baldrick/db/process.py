@@ -1081,7 +1081,7 @@ class ProcessDatabase:
             mappings = result.scalars().all()
 
             analyzer = MemoryAnalyzer(self.config)
-            all_anomalies = []
+            all_anomalies: list[str] = []
             corruption_count = 0
             skipped_count = 0
 
@@ -1098,7 +1098,12 @@ class ProcessDatabase:
                     )
 
                     if analysis_data.get("anomalies"):
-                        all_anomalies.extend(analysis_data["anomalies"])
+                        region = (
+                            f"{mapping.pathname} 0x{mapping.start_addr:x}-0x{mapping.end_addr:x}"
+                        )
+                        all_anomalies.extend(
+                            f"{region}: {anomaly}" for anomaly in analysis_data["anomalies"]
+                        )
 
                     if analysis_data.get("likely_corrupted"):
                         corruption_count += 1
